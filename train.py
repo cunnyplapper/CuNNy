@@ -41,7 +41,7 @@ class Net(nn.Module):
         nn.init.kaiming_normal_(
             self.up.weight, mode='fan_out', nonlinearity='relu')
         nn.init.xavier_normal_(
-           self.down.weight, gain=nn.init.calculate_gain('relu'))
+           self.down.weight, gain=nn.init.calculate_gain('tanh'))
         nn.init.zeros_(self.up.bias)
         nn.init.zeros_(self.down.bias)
 

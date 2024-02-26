@@ -22,7 +22,7 @@ def weight(ws, x, y, ich, och, r, iidx, oidx):
     S(f'\tr += ', end='')
     w = [str(v.item()) for v in ws[(4*oidx):(4*(1+oidx)), (4*iidx):(4*(1+iidx)),
                                    y, x].swapdims(0, 1).flatten()]
-    S(f'{"mat4" if len(w)>4 else "vec4"}({", ".join(w)}) * l{iidx}'
+    S(f'{"mat4" if len(w) > 4 else "vec4"}({", ".join(w)}) * l{iidx}'
       f'({x - cent}.0, {y - cent}.0);')
 
 def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None):
