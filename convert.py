@@ -268,6 +268,7 @@ S('/* ------------------------------------------------------------------- */\n')
 S(fsr)
 
 texs = ['LUMA']
+nconv = 1
 for k_ in m:
     suf = 'weight'
     if not k_.endswith(suf):
@@ -280,9 +281,8 @@ for k_ in m:
     if k.startswith('up'):
         texs = write('up', k_, 'max(r, 0.0)', texs)
     elif k.startswith('conv'):
-        name = k.replace('.', '')
-        name = name[:-1] + str(int(name[-1]) + 1)
-        texs = write(str(name), k_, 'max(r, 0.0)', texs)
+        texs = write(f'conv{nconv}', k_, 'max(r, 0.0)', texs)
+        nconv += 1
     elif k.startswith('down'):
         texs = write('down', k_, 'tanh(r)', texs)
 
