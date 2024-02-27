@@ -38,7 +38,7 @@ def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None):
     S(f'//!WHEN OUTPUT.w LUMA.w / 1.3 > OUTPUT.h LUMA.h / 1.3 > *')
     if loadfn:
         for i, inv in enumerate(ins):
-            elm = '.r' if ins == 'LUMA' else ''
+            elm = '.r' if inv == 'LUMA' else ''
             S(f'#define l{i}(x, y) {inv}_texOff(vec2(x, y)){elm}')
     S(f'vec4 hook() {openbr}')
     S(f'\tvec4 r = vec4(0.0);')
