@@ -37,6 +37,7 @@ class Net(nn.Module):
                 c.weight, mode='fan_out', nonlinearity='relu')
             nn.init.zeros_(c.bias)
             self.conv.append(c)
+            self.conv.append(nn.ReLU())
         self.down = nn.Conv2d(D, 4, 3, padding='same')
         nn.init.kaiming_normal_(
             self.up.weight, mode='fan_out', nonlinearity='relu')
@@ -47,7 +48,7 @@ class Net(nn.Module):
 
     def forward(self, x, y):
         x = F.relu(self.up(x))
-        x = F.relu(self.conv(x))
+        x = self.conv(x)
         x = F.tanh(self.down(x))
         x = F.pixel_shuffle(x, 2)
         x = torch.add(x, y)
