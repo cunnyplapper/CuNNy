@@ -200,7 +200,7 @@ vec4 hook() {
 //!HEIGHT LUMA.h
 //!COMPONENTS 4
 //!WHEN OUTPUT.w LUMA.w / 1.3 > OUTPUT.h LUMA.h / 1.3 > *
-#define l0(x, y) LUMA_texOff(vec2(x, y))
+#define l0(x, y) LUMA_texOff(vec2(x, y)).r
 vec4 hook() {
 	vec4 r = vec4(0.0);
 	r += vec4(0.1850585639476776, 0.0052183219231665134, -0.18585993349552155, 0.042652543634176254) * l0(-1.0, -1.0);
@@ -224,7 +224,7 @@ vec4 hook() {
 //!HEIGHT LUMA.h
 //!COMPONENTS 4
 //!WHEN OUTPUT.w LUMA.w / 1.3 > OUTPUT.h LUMA.h / 1.3 > *
-#define l0(x, y) LUMA_texOff(vec2(x, y))
+#define l0(x, y) LUMA_texOff(vec2(x, y)).r
 vec4 hook() {
 	vec4 r = vec4(0.0);
 	r += vec4(0.07836941629648209, -0.007312506437301636, 0.0788574144244194, -0.004170526750385761) * l0(-1.0, -1.0);

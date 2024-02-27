@@ -200,7 +200,7 @@ vec4 hook() {
 //!HEIGHT LUMA.h
 //!COMPONENTS 4
 //!WHEN OUTPUT.w LUMA.w / 1.3 > OUTPUT.h LUMA.h / 1.3 > *
-#define l0(x, y) LUMA_texOff(vec2(x, y))
+#define l0(x, y) LUMA_texOff(vec2(x, y)).r
 vec4 hook() {
 	vec4 r = vec4(0.0);
 	r += vec4(-0.03869612142443657, 0.015531276352703571, 0.02158425562083721, 0.02973450906574726) * l0(-1.0, -1.0);
