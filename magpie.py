@@ -20,16 +20,15 @@ def S(txt, end='\n'):
     shader += txt + end
 
 def weight(ws, x, y, ich, och, r, iidx, oidx):
-    cent = r // 2
-    S(f'\tr += ', end='')
+    S(f'\tr{oidx} += ', end='')
     w = [str(v.item()) for v in ws[(4*oidx):(4*(1+oidx)), (4*iidx):(4*(1+iidx)),
                                    y, x].swapdims(0, 1).flatten()]
     wflat = ", ".join(w)
-    l = f'l{iidx}({x - cent}.0, {y - cent}.0)';
+    l = f's{iidx}[{y * r + x}]'
     if len(w) > 4:
-        S(f'mul({l}, float4x4({wflat}));')
+        S(f'mul({l}, min16float4x4({wflat}));')
     else:
-        S(f'float4({wflat}) * {l};')
+        S(f'min16float4({wflat}) * {l};')
 
 header = """//!MAGPIE EFFECT
 //!VERSION 4
@@ -57,48 +56,68 @@ SamplerState SP;
 SamplerState SL;
 
 """
-npass = 3 if usercas else 2
-def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None):
+npass = 2 if usercas else 1
+def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None,
+            multiout=False, signed=False):
     global header, npass
-    # S(f'//!DESC CuNNy-{version}-{ps}')
+    npass += 1
+    S(f'//!DESC CuNNy-{version}-{ps}')
     S(f'//!PASS {npass}')
-    S(f'//!STYLE PS')
+    if upscale:
+        S(f'//!STYLE PS')
+    else:
+        S(f'//!BLOCK_SIZE 16')
+        S(f'//!NUM_THREADS 64')
     S(f'//!IN ' + ', '.join(ins))
-    S(f'//!OUT {save if save else "OUTPUT"}')
+    S(f'//!OUT {", ".join(save) if save else "OUTPUT"}')
     if save:
         S('#define O(t, p) t.SampleLevel(SP, pos + p * pt, 0)')
-    header += f'//!TEXTURE\n'
-    header += f'//!WIDTH INPUT_WIDTH\n'
-    header += f'//!HEIGHT INPUT_HEIGHT\n'
-    header += f'//!FORMAT {"R16_FLOAT" if ch == 1 else "R16G16B16A16_FLOAT"}\n'
-    header += f'Texture2D {save};\n'
-    header += f'\n'
+    c4fmt = "R8G8B8A8_SNORM" if signed else "R8G8B8A8_UNORM"
+    for tex in save if save else []:
+        header += f'//!TEXTURE\n'
+        header += f'//!WIDTH INPUT_WIDTH\n'
+        header += f'//!HEIGHT INPUT_HEIGHT\n'
+        header += f'//!FORMAT {"R16_FLOAT" if ch == 1 else c4fmt}\n'
+        header += f'Texture2D {tex};\n'
+        header += f'\n'
     if loadfn:
         for i, inv in enumerate(ins):
             fn = f'O({inv}, float2(x, y))'
             if inv == 'INPUT':
                 fn = f'dot(float3(0.299, 0.587, 0.114), {fn}.rgb)'
             S(f'#define l{i}(x, y) {fn}')
-    S(f'float4 Pass{npass}(float2 pos) {openbr}')
+    if upscale:
+        S(f'float4 Pass{npass}(float2 pos) {openbr}')
+    else:
+        S(f'void hook(uint2 gxy, float2 pos) {openbr}')
     S(f'\tfloat2 pt = float2(GetInputPt());')
-    S(f'\tfloat4 r = 0.0;')
-    npass += 1
 
-def out(ps, k, actfn, ins, ws, ich, och, r, oidx):
-    ps = f'{ps}' + (f':{oidx}' if ps != 'down' else '')
-    tex = ps.replace(':', '_')
-    prelude(ps, ins, loadfn=True, save=tex)
-    for iidx in range(max(ich // 4, 1)):
-        for y in range(r):
-            for x in range(r):
-                weight(ws, x, y, ich, och, r, iidx, oidx)
-    bn = k + 'bias'
-    if bn in m:
-        b = [str(v.item()) for v in m[bn][4*oidx:4*(oidx+1)]]
-        S(f'\tr += float4({", ".join(b)});')
-    S(f'\treturn {actfn};')
+def skele():
+    S(f'void Pass{npass}(uint2 blockStart, uint3 tid) {openbr}')
+    S('\tuint2 gxy = Rmp8x8(tid.x) + blockStart;')
+    S('\tuint2 size = GetInputSize();')
+    S('\tif (gxy.x >= size.x || gxy.y >= size.y) {')
+    S('\t\treturn;')
+    S('\t};')
+    S('\tfloat2 pos = (gxy + 0.5) * GetInputPt();')
+    S('\tfloat2 step = 8 * GetInputPt();')
+    S('\thook(gxy, pos);')
+    S('\tgxy.x += 8u;')
+    S('\tpos.x += step.x;')
+    S('\tif (gxy.x < size.x || gxy.y < size.y) {')
+    S('\t\thook(gxy, pos);')
+    S('\t}')
+    S('\tgxy.y += 8u;')
+    S('\tpos.y += step.y;')
+    S('\tif (gxy.x < size.x || gxy.y < size.y) {')
+    S('\t\thook(gxy, pos);')
+    S('\t}')
+    S('\tgxy.x -= 8u;')
+    S('\tpos.x -= step.x;')
+    S('\tif (gxy.x < size.x || gxy.y < size.y) {')
+    S('\t\thook(gxy, pos);')
+    S('\t}')
     S(f'{closebr}\n')
-    return tex
 
 def write(ps, k, actfn, ins):
     ws = m[k+'weight']
@@ -106,9 +125,37 @@ def write(ps, k, actfn, ins):
     och = sz[0]
     ich = sz[1]
     r = sz[2]
-    texs = []
+    texs = [f'{ps}' + (f'_{oidx}' if ps != 'down' else '')
+             for oidx in range(och // 4)]
+    prelude(ps, ins, loadfn=True, save=texs, multiout=True, signed=(ps == 'down'))
+    cent = r // 2
+    S(f'\tint i;')
+    for iidx in range(max(ich // 4, 1)):
+        f1 = ins == ['INPUT']
+        stype = 'min16float4' if not f1 else 'min16float'
+        r2 = r * r
+        S(f'\t{stype} s{iidx}[{r2}] = ', end='')
+        S('{' + ', '.join((['0.0'] if f1 else ['min16float4(0.0, 0.0, 0.0, 0.0)']) * r2)+ '};')
+        S(f'\ti = 0;')
+        S(f'\tfor (float y = {-cent}.0; y < {cent + 1}.0; y += 1.0) ', end = '')
+        S(f'for (float x = {-cent}.0; x < {cent + 1}.0; x += 1.0) ', end = '')
+        S(f's{iidx}[i++] = l{iidx}(x, y);')
     for oidx in range(och // 4):
-        texs.append(out(ps, k, actfn, ins, ws, ich, och, r, oidx))
+        S(f'\tmin16float4 r{oidx} = 0.0;')
+    for oidx in range(och // 4):
+        for iidx in range(max(ich // 4, 1)):
+            for y in range(r):
+                for x in range(r):
+                    weight(ws, x, y, ich, och, r, iidx, oidx)
+        bn = k + 'bias'
+        if bn in m:
+            b = [str(v.item()) for v in m[bn][4*oidx:4*(oidx+1)]]
+            S(f'\tr{oidx} += float4({", ".join(b)});')
+        S(f'\tr{oidx} = {actfn.replace("X", f"r{oidx}")};')
+    for i, tex in enumerate(texs):
+        S(f'\t{tex}[gxy] = r{i};')
+    S(f'{closebr}')
+    skele()
     return texs
 
 easu = """// FSR mpv | modified
@@ -368,8 +415,11 @@ S(f'// CuNNy {version.replace("-", " ")}')
 S(f'// Copyright (c) 2024 cunnyplapper')
 S(lgpl, end='')
 S('/* ------------------------------------------------------------------- */\n')
-S(easu)
+header = shader + header
+shader = ''
+
 fsrtex = 'easu'
+S(easu)
 
 if usercas:
     fsrtex = 'rcas'
@@ -387,17 +437,18 @@ for k_ in m:
     if k.startswith(pref):
         k = k[len(pref):-1]
     if k.startswith('up'):
-        texs = write('up', k_, 'max(r, 0.0)', texs)
+        texs = write('up', k_, 'max(X, 0.0)', texs)
     elif k.startswith('conv'):
-        texs = write(f'conv{nconv}', k_, 'max(r, 0.0)', texs)
+        texs = write(f'conv{nconv}', k_, 'max(X, 0.0)', texs)
         nconv += 1
     elif k.startswith('down'):
-        texs = write('down', k_, 'tanh(r)', texs)
+        texs = write('down', k_, 'tanh(X)', texs)
 
 shader = header.replace('__FSR__', fsrtex) + shader
 prelude('shuffle', [*texs, fsrtex, 'INPUT'], ch=1, upscale=2)
 S('\tconst static float2x3 rgb2uv = {-0.169, -0.331, 0.5, 0.5, -0.419, -0.081};')
 S('\tconst static float3x3 yuv2rgb = {1, -0.00093, 1.401687, 1, -0.3437, -0.71417, 1, 1.77216, 0.00099};')
+S(f'\tfloat4 r = 0.0;')
 S(f'\tfloat2 size = float2(GetInputSize());')
 S(f'\tfloat2 f = frac(pos * size);')
 S(f'\tint2 i = int2(f * 2.0);')

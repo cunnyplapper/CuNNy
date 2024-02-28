@@ -93,7 +93,7 @@ transform = transforms.Compose([transforms.ToTensor()])
 fsr = 'in/easu'
 rcas = False
 if not os.path.isdir(fsr):
-    fsr = next(f for f in os.listdir('in') if 'rcas-' in f)
+    fsr = 'in/' + next(f for f in os.listdir('in') if 'rcas-' in f)
     rcas = True
 dataset = Dataset('in/64', fsr, 'in/128', transform)
 dataloader = torch.utils.data.DataLoader(dataset, batch_size=B, shuffle=True)
