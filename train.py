@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 import os
 import sys
+import argparse
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -13,10 +14,6 @@ from PIL import Image
 
 dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# internal convolutions
-N  = int(sys.argv[1])
-# feature layers/depth
-D = int(sys.argv[2]) // 4 * 4
 # epochs
 E = 1000
 # batch size
@@ -25,6 +22,25 @@ B = 64
 LR = 0.00007
 # max learning rate (with OneCycleLR)
 MAX_LR = 0.003
+
+parser = argparse.ArgumentParser()
+parser.add_argument('N', type=int)
+parser.add_argument('D', type=int)
+parser.add_argument('-s', '--suffix', type=str, default=None)
+parser.add_argument('-e', '--epochs', type=int, default=E)
+parser.add_argument('-b', '--batch', type=int, default=B)
+parser.add_argument('-l', '--lr', type=float, default=LR)
+parser.add_argument('-L', '--max-lr', type=float, default=MAX_LR)
+args = parser.parse_args()
+
+# internal convolutions
+N  = args.N
+# feature layers/depth
+D = args.D
+E = args.epochs
+B = args.batch
+LR = args.lr
+MAX_LR = args.max_lr
 
 class Net(nn.Module):
     def __init__(self):
@@ -115,8 +131,10 @@ with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
 
 i = 0
 fn = ''
-suf = ('RCAS-' if rcas else '') + (sys.argv[3] + '-' if len(sys.argv) > 3 else '')
+suf = ('RCAS-' if rcas else '') + (args.suffix + '-' if args.suffix else '')
 while os.path.exists((fn := f'models/{N}x{D}-{suf}{i}.pt')):
     i += 1
 torch.save(model.state_dict(), fn)
 print(f'saved to {fn}')
+with open('test/last.txt', 'w') as f:
+    f.write(fn)
