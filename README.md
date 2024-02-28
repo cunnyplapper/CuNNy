@@ -40,7 +40,7 @@ Convert the resulting model to an mpv shader by running
 `py mpv.py <models/model.pt>`.
 
 Convert the resulting model to a Magpie effect by running
-`py mpv.py <models/model.pt>`.
+`py magpie.py <models/model.pt>`.
 
 Trains very fast on my machine.
 
