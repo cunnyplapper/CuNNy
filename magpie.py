@@ -461,7 +461,7 @@ S(f'\tfloat3 px = mul(yuv2rgb, float3(r.r, uv));')
 S(f'\treturn float4(px, 1.0);')
 S(f'{closebr}')
 
-fp = f'hlsl/CuNNy-{stem}.hlsl'
+fp = f'magpie/CuNNy-{stem}.hlsl'
 with open(fp, 'w') as f:
     f.write(shader)
 print(fp)
