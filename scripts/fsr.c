@@ -1,4 +1,4 @@
-/* minimal implementation of FSR's EASU pass using vulkan */
+/* minimal implementation of FSR using vulkan */
 /* Copyright (C) 2024 cunnyplapper
  * SPDX-License-Identifier: MIT */
 #include <stdio.h>
@@ -58,16 +58,16 @@ static void trnsimg(VkCommandBuffer cb, VkImage img, VkImageLayout old,
 
 int main(int argc, char *argv[])
 {
-	ENSURE(argc == 3 || argc == 4);
+	ENSURE(argc == 4);
+	u32 rcas = 0;
+	rcas = argv[3][0] - '0';
+	ENSURE(rcas == 0 || rcas == 1);
 	i32 w, h, ch;
 	u32 inch = 1;
 	u8 *pxs = stbi_load(argv[1], &w, &h, &ch, inch);
 	ENSURE(pxs);
 	f32 scale = 2.0f;
 	char *end;
-	if (argc == 4)
-		scale = strtof(argv[3], &end);
-	ENSURE(scale >= 0.5f && scale <= 2.0f);
 	i32 ow = (i32)(w * scale), oh = (i32)(h * scale);
 	fprintf(stderr, "%dx%d -> %dx%d\n", w, h, ow, oh);
 	ENSURE(gladLoaderLoadVulkan(NULL, NULL, NULL) != 0);
@@ -161,7 +161,7 @@ int main(int argc, char *argv[])
 	VKENSURE(vkMapMemory(dev, bufmem, 0, VK_WHOLE_SIZE, 0, &bufp));
 	memcpy(bufp, pxs, w * h * inch);
 	stbi_image_free(pxs);
-	VkImage iimg, oimg;
+	VkImage iimg, easuimg, rcasimg;
 	VkImageCreateInfo ici = {
 		.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
 		.imageType = VK_IMAGE_TYPE_2D,
@@ -183,21 +183,28 @@ int main(int argc, char *argv[])
 	ici.format = VK_FORMAT_R8_UNORM;
 	ici.usage = (VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
 		     VK_IMAGE_USAGE_STORAGE_BIT);
-	VKENSURE(vkCreateImage(dev, &ici, NULL, &oimg));
-	VkDeviceMemory imem, omem;
+	VKENSURE(vkCreateImage(dev, &ici, NULL, &easuimg));
+	VKENSURE(vkCreateImage(dev, &ici, NULL, &rcasimg));
+	VkDeviceMemory imem, easumem, rcasmem;
 	vkGetImageMemoryRequirements(dev, iimg, &mr);
 	mai.allocationSize = mr.size;
 	mai.memoryTypeIndex = memidx(
 		mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &pdmp);
 	VKENSURE(vkAllocateMemory(dev, &mai, NULL, &imem));
 	VKENSURE(vkBindImageMemory(dev, iimg, imem, 0));
-	vkGetImageMemoryRequirements(dev, oimg, &mr);
+	vkGetImageMemoryRequirements(dev, easuimg, &mr);
 	mai.allocationSize = mr.size;
 	mai.memoryTypeIndex = memidx(
 		mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &pdmp);
-	VKENSURE(vkAllocateMemory(dev, &mai, NULL, &omem));
-	VKENSURE(vkBindImageMemory(dev, oimg, omem, 0));
-	VkImageView iimgv, oimgv;
+	VKENSURE(vkAllocateMemory(dev, &mai, NULL, &easumem));
+	VKENSURE(vkBindImageMemory(dev, easuimg, easumem, 0));
+	vkGetImageMemoryRequirements(dev, rcasimg, &mr);
+	mai.allocationSize = mr.size;
+	mai.memoryTypeIndex = memidx(
+		mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &pdmp);
+	VKENSURE(vkAllocateMemory(dev, &mai, NULL, &rcasmem));
+	VKENSURE(vkBindImageMemory(dev, rcasimg, rcasmem, 0));
+	VkImageView iimgv, easuimgv, rcasimgv;
 	VkImageViewCreateInfo ivci = {
 		.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
 		.viewType = VK_IMAGE_VIEW_TYPE_2D,
@@ -210,9 +217,12 @@ int main(int argc, char *argv[])
 	ivci.image = iimg;
 	ivci.format = VK_FORMAT_R8_UNORM;
 	VKENSURE(vkCreateImageView(dev, &ivci, NULL, &iimgv));
-	ivci.image = oimg;
+	ivci.image = easuimg;
 	ivci.format = VK_FORMAT_R8_UNORM;
-	VKENSURE(vkCreateImageView(dev, &ivci, NULL, &oimgv));
+	VKENSURE(vkCreateImageView(dev, &ivci, NULL, &easuimgv));
+	ivci.image = rcasimg;
+	ivci.format = VK_FORMAT_R8_UNORM;
+	VKENSURE(vkCreateImageView(dev, &ivci, NULL, &rcasimgv));
 	VkSampler smplr;
 	VkSamplerCreateInfo sci = {
 		.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
@@ -236,6 +246,12 @@ int main(int argc, char *argv[])
 			.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 			.descriptorCount = 1,
 			.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT
+		},
+		{
+			.binding = 2,
+			.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+			.descriptorCount = 1,
+			.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT
 		}
 	};
 	VkDescriptorSetLayoutCreateInfo dslci = {
@@ -252,7 +268,7 @@ int main(int argc, char *argv[])
 		},
 		{
 			.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-			.descriptorCount = 1
+			.descriptorCount = 2
 		}
 	};
 	VkDescriptorPoolCreateInfo dpci = {
@@ -290,10 +306,21 @@ int main(int argc, char *argv[])
 			.dstBinding = 1,
 			.descriptorCount = 1,
 			.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-			.pImageInfo = &(VkDescriptorImageInfo){
-				.imageView = oimgv,
+			.pImageInfo = (VkDescriptorImageInfo[]){{
+				.imageView = easuimgv,
 				.imageLayout = VK_IMAGE_LAYOUT_GENERAL
-			}
+			}}
+		},
+		{
+			.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+			.dstSet = ds,
+			.dstBinding = 2,
+			.descriptorCount = 1,
+			.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+			.pImageInfo = (VkDescriptorImageInfo[]){{
+				.imageView = rcasimgv,
+				.imageLayout = VK_IMAGE_LAYOUT_GENERAL
+			}}
 		}
 	};
 	vkUpdateDescriptorSets(dev, COUNTOF(wds), wds, 0, NULL);
@@ -302,7 +329,7 @@ int main(int argc, char *argv[])
 		.queueFamilyIndex = qfi,
 		.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
 	};
-	FILE *f = fopen("scripts/easu.spv", "rb");
+	FILE *f = fopen("scripts/fsr.spv", "rb");
 	ENSURE(f);
 	fseek(f, 0, SEEK_END);
 	u32 fsz = ftell(f);
@@ -322,7 +349,8 @@ int main(int argc, char *argv[])
 	} Vec2;
 	struct {
 		Vec2 insz, outsz;
-	} pc = {{w, h}, {ow, oh}};
+		u32 pass;
+	} pc = {{w, h}, {ow, oh}, 0};
 	VkPushConstantRange pcr = {
 		.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
 		.size = sizeof(pc)
@@ -384,7 +412,12 @@ int main(int argc, char *argv[])
 		VK_PIPELINE_STAGE_TRANSFER_BIT,
 		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 		VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
-	trnsimg(cb, oimg, VK_IMAGE_LAYOUT_UNDEFINED,
+	trnsimg(cb, easuimg, VK_IMAGE_LAYOUT_UNDEFINED,
+		VK_IMAGE_LAYOUT_GENERAL,
+		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+		0, VK_ACCESS_SHADER_WRITE_BIT);
+	trnsimg(cb, rcasimg, VK_IMAGE_LAYOUT_UNDEFINED,
 		VK_IMAGE_LAYOUT_GENERAL,
 		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
 		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -395,15 +428,24 @@ int main(int argc, char *argv[])
 	vkCmdPushConstants(cb, pll, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc),
 			   &pc);
 	vkCmdDispatch(cb, (ow + 7) / 8, (oh + 7) / 8, 1);
-	trnsimg(cb, oimg, VK_IMAGE_LAYOUT_GENERAL,
+	VkImage outimg = easuimg;
+	if (rcas) {
+		pc.pass = 1;
+		vkCmdPushConstants(cb, pll, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+				   sizeof(pc), &pc);
+		vkCmdDispatch(cb, (ow + 7) / 8, (oh + 7) / 8, 1);
+		outimg = rcasimg;
+	}
+	trnsimg(cb, outimg, VK_IMAGE_LAYOUT_GENERAL,
 		VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 		VK_PIPELINE_STAGE_TRANSFER_BIT,
 		VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
 	bic.imageExtent.width = ow;
 	bic.imageExtent.height = oh;
-	vkCmdCopyImageToBuffer(cb, oimg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-			       buf, 1, &bic);
+	vkCmdCopyImageToBuffer(
+		cb, outimg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1,
+		&bic);
 	VKENSURE(vkEndCommandBuffer(cb));
 	VkSubmitInfo si = {
 		.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,

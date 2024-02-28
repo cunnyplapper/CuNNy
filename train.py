@@ -71,7 +71,10 @@ class Dataset(torch.utils.data.Dataset):
         return self.x[idx], self.y[idx], self.true[idx]
 
 transform = transforms.Compose([transforms.ToTensor()])
-dataset = Dataset('in/64', 'in/fsr', 'in/128', transform)
+rcas_path = 'in/rcas'
+rcas = os.path.isdir(rcas_path)
+dataset = Dataset('in/64', rcas_path if rcas else 'in/easu', 'in/128',
+                  transform)
 dataloader = torch.utils.data.DataLoader(dataset, batch_size=B, shuffle=True)
 
 model = Net().to(dev)
@@ -112,7 +115,7 @@ with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
 
 i = 0
 fn = ''
-suf = sys.argv[3] + '-' if len(sys.argv) > 3 else ''
+suf = ('RCAS-' if rcas else '') + (sys.argv[3] + '-' if len(sys.argv) > 3 else '')
 while os.path.exists((fn := f'models/{N}x{D}-{suf}{i}.pt')):
     i += 1
 torch.save(model.state_dict(), fn)

@@ -26,7 +26,8 @@
 #version 460 core
 
 layout (binding = 0) uniform sampler2D u_in;
-layout (binding = 1, r8) uniform writeonly image2D u_out;
+layout (binding = 1, r8) uniform image2D u_easu;
+layout (binding = 2, r8) uniform image2D u_rcas;
 
 // Shader code
 
@@ -141,7 +142,7 @@ void FsrEasuSet(
 	len += dot(vec2(w), vec2(lenX, lenY));
 }
 
-vec4 hook(vec2 HOOKED_pos, vec2 HOOKED_size, vec2 HOOKED_pt) {
+vec4 easu(vec2 HOOKED_pos, vec2 HOOKED_size, vec2 HOOKED_pt) {
 	// Result
 	vec4 pix = vec4(0.0, 0.0, 0.0, 1.0);
 
@@ -294,8 +295,77 @@ vec4 hook(vec2 HOOKED_pos, vec2 HOOKED_size, vec2 HOOKED_pt) {
 	return pix;
 }
 
+//!HOOK LUMA
+//!BIND EASUTEX
+//!DESC FidelityFX Super Resolution v1.0.2 (RCAS)
+//!WIDTH EASUTEX.w
+//!HEIGHT EASUTEX.h
+//!COMPONENTS 1
+
+// User variables - RCAS
+// CuNNy: don't change these unless you changed them when training the model too
+#define SHARPNESS 1.0 // Controls the amount of sharpening. The scale is {0.0 := maximum, to N>0, where N is the number of stops (halving) of the reduction of sharpness}. 0.0 to 2.0.
+#define FSR_RCAS_DENOISE 1 // If set to 1, lessens the sharpening on noisy areas. Can be disabled for better performance. 0 or 1.
+
+// Shader code
+
+#define FSR_RCAS_LIMIT (0.25 - (1.0 / 16.0)) // This is set at the limit of providing unnatural results for sharpening.
+
+float APrxMedRcpF1(float a) {
+	float b = uintBitsToFloat(uint(0x7ef19fff) - floatBitsToUint(a));
+	return b * (-b * a + 2.0);
+}
+
+vec4 rcas(ivec2 pos, ivec2 sz) {
+
+	// Algorithm uses minimal 3x3 pixel neighborhood.
+	//    b 
+	//  d e f
+	//    h
+	#define EASUTEX_texOff(p) imageLoad(u_easu, clamp(pos + p, ivec2(0), sz))
+	float b = EASUTEX_texOff(ivec2( 0, -1)).r;
+	float d = EASUTEX_texOff(ivec2(-1,  0)).r;
+	float e = EASUTEX_texOff(ivec2(0)).r;
+	float f = EASUTEX_texOff(ivec2(1, 0)).r;
+	float h = EASUTEX_texOff(ivec2(0, 1)).r;
+
+	// Min and max of ring.
+	float mn1L = min(AMin3F1(b, d, f), h);
+
+	float mx1L = max(AMax3F1(b, d, f), h);
+
+	// Immediate constants for peak range.
+	vec2 peakC = vec2(1.0, -1.0 * 4.0);
+
+	// Limiters, these need to be high precision RCPs.
+
+	float hitMinL = min(mn1L, e) / (4.0 * mx1L);
+	float hitMaxL = (peakC.x - max(mx1L, e)) / (4.0 * mn1L + peakC.y);
+	float lobeL = max(-hitMinL, hitMaxL);
+	float lobe = max(float(-FSR_RCAS_LIMIT), min(lobeL, 0.0)) * exp2(-clamp(float(SHARPNESS), 0.0, 2.0));
+
+	// Apply noise removal.
+#if (FSR_RCAS_DENOISE == 1)
+	// Noise detection.
+	float nz = 0.25 * b + 0.25 * d + 0.25 * f + 0.25 * h - e;
+	nz = clamp(abs(nz) * APrxMedRcpF1(AMax3F1(AMax3F1(b, d, e), f, h) - AMin3F1(AMin3F1(b, d, e), f, h)), 0.0, 1.0);
+	nz = -0.5 * nz + 1.0;
+	lobe *= nz;
+#endif
+
+
+	// Resolve, which needs the medium precision rcp approximation to avoid visible tonality changes.
+	float rcpL = APrxMedRcpF1(4.0 * lobe + 1.0);
+	vec4 pix = vec4(0.0, 0.0, 0.0, 1.0);
+	pix.r = float((lobe * b + lobe * d + lobe * h + lobe * f + e) * rcpL);
+
+	return pix;
+
+}
+
 layout (push_constant, std430) uniform UPc {
 	vec2 insz, outsz;
+	uint pass;
 } u_pc;
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
@@ -303,9 +373,13 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 void main()
 {
 	ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
-	ivec2 imgsz = imageSize(u_out);
+	ivec2 imgsz = imageSize(u_easu);
 	if (pos.x > imgsz.x || pos.y > imgsz.y)
 		return;
-	imageStore(u_out, pos, hook((vec2(pos) + 0.5) / u_pc.outsz, u_pc.insz,
-		   1.0 / u_pc.insz));
+	if (u_pc.pass == 0) {
+		imageStore(u_easu, pos, easu((vec2(pos) + 0.5) / u_pc.outsz,
+					     u_pc.insz, 1.0 / u_pc.insz));
+	} else {
+		imageStore(u_rcas, pos, rcas(pos, imgsz));
+	}
 }
