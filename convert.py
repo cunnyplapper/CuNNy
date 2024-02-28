@@ -8,7 +8,7 @@ shader = ''
 N = sum(1 for x in m.keys() if 'conv' in x and 'weight' in x)
 D = next(m[x] for x in m if 'up' in x and 'weight' in x).size(dim=0)
 stem = Path(sys.argv[1]).stem
-version = stem[:stem.rfind("-")]
+version = stem[:stem.rfind('-')]
 
 # thanks vim
 openbr = '{'
@@ -258,7 +258,7 @@ rcas = """//!DESC CuNNy-RCAS
 //!COMPONENTS 1
 
 // CuNNy: do not change unless changed during training as well
-#define SHARPNESS 2.0
+#define SHARPNESS __SHARPNESS__
 #define FSR_RCAS_LIMIT (0.25 - (1.0 / 16.0))
 
 float APrxMedRcpF1(float a) {
@@ -330,9 +330,10 @@ S(lgpl, end='')
 S('/* ------------------------------------------------------------------- */\n')
 S(easu)
 fsrtex = 'easu'
+
 if 'RCAS' in stem:
     fsrtex = 'rcas'
-    S(rcas)
+    S(rcas.replace('__SHARPNESS__', str(m['sharpness'])))
 
 texs = ['LUMA']
 nconv = 1

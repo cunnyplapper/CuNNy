@@ -15,7 +15,7 @@ from PIL import Image
 dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # epochs
-E = 1000
+E = 500
 # batch size
 B = 64
 # learning rate
@@ -90,10 +90,12 @@ class Dataset(torch.utils.data.Dataset):
         return self.x[idx], self.y[idx], self.true[idx]
 
 transform = transforms.Compose([transforms.ToTensor()])
-rcas_path = 'in/rcas'
-rcas = os.path.isdir(rcas_path)
-dataset = Dataset('in/64', rcas_path if rcas else 'in/easu', 'in/128',
-                  transform)
+fsr = 'in/easu'
+rcas = False
+if not os.path.isdir(fsr):
+    fsr = next(f for f in os.listdir('in') if 'rcas-' in f)
+    rcas = True
+dataset = Dataset('in/64', 'in/' + fsr, 'in/128', transform)
 dataloader = torch.utils.data.DataLoader(dataset, batch_size=B, shuffle=True)
 
 model = Net().to(dev)
@@ -137,7 +139,10 @@ fn = ''
 suf = ('RCAS-' if rcas else '') + (args.suffix + '-' if args.suffix else '')
 while os.path.exists((fn := f'models/{N}x{D}-{suf}{i}.pt')):
     i += 1
-torch.save(model.state_dict(), fn)
+sd = model.state_dict()
+if rcas:
+    sd['sharpness'] = float(fsr.replace('rcas-', ''))
+torch.save(sd, fn)
 print(f'saved to {fn}')
 with open('test/last.txt', 'w') as f:
     f.write(fn)

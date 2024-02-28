@@ -5,7 +5,9 @@ if [ "$#" -lt 2 ]; then
 elif [ "$2" -eq 0 ]; then
 	folder='easu'
 elif [ "$2" -eq 1 ]; then
-	folder='rcas'
+	sharpness=2.0
+	./scripts/build.sh -DSHARPNESS=$sharpness || exit
+	folder="rcas-$sharpness"
 fi
 mkdir -p models
 mkdir -p test

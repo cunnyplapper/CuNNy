@@ -27,13 +27,15 @@ quality 75. It's kinda splodgy, but seems okay on some shows.
 
 Tested training with PyTorch nightly. If any errors arise try using nightly.
 
-Prepare data by running `sh scripts/build.sh` and then `sh scripts/proc.sh
-<input-folder> <use-rcas>`.
+Prepare data by running `sh scripts/build.sh`, then `sh scripts/split.sh
+<input-folder> <output-128-grids>`, then `sh scripts/proc.sh <128-grids>
+<use-rcas>`.
 
 To train `py train.py <N> <D>` where `N` is the number of internal convolutions
 and `D` is the number of feature layers.
 
-Convert the resulting model by running `py convert.py <models/model.pt>`
+Convert the resulting model to an mpv shader by running
+`py convert.py <models/model.pt>`.
 
 Trains very fast on my machine.
 
