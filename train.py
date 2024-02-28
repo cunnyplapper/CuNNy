@@ -71,7 +71,10 @@ class Net(nn.Module):
         return torch.clamp(x, 0., 1.)
 
 def load(dir, file, transform):
-    return transform(Image.open(os.path.join(dir, file)).convert('L')).to(dev)
+    fn = os.path.join(dir, file)
+    if not os.path.exists(fn):
+        fn = fn.replace('png', 'jpg')
+    return transform(Image.open(fn).convert('L')).to(dev)
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, dirx, diry, dirtrue, transform):
@@ -119,8 +122,8 @@ def train():
         runloss += loss
         nloss += 1
     with torch.no_grad():
-        print(f'[{idx + 1}/{E}] L: {(runloss / nloss):.7f} '
-              f'| psnr: {psnr(pred, true):.7f} ')
+        print(f'[{idx + 1}/{E}] L: {(runloss / nloss):.5f} '
+              f'| psnr: {psnr(pred, true):.3f} ')
     nloss = 0
     runloss = 0.
     idx += 1

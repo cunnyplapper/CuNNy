@@ -11,14 +11,17 @@ Supports exporting to an mpv ~~meme~~shader!
 
 Use them like any other mpv usershader.
 
-The order of best quality -> worst quality is `3x32 -> 2x32 -> 1x32 -> 1x16 ->
-1x8 -> 1x4 -> 0x4`.
+The order of best quality -> worst quality is `3x32` -> `2x32` -> `1x32` ->
+`1x16` -> `1x8` -> `1x4` -> `0x4`.
 
 Conversely the order of fastest -> slowest would be the reverse, with `0x4`
 being the fastest and `3x32` being the slowest.
 
-There are `RCAS` variants that provide slightly sharper results for a very small
-cost in performance (which becomes negligible the bigger the model).
+Variants:
+- `RCAS`: Provide slightly sharper results for a very small cost in performance
+(which becomes negligible the bigger the model).
+- `DS`: Trained on images downsampled with Hermite and compressed to JPEG
+quality 75. It's kinda splodgy, but seems okay on some shows.
 
 # Training
 
