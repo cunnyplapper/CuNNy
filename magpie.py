@@ -129,19 +129,18 @@ def write(ps, k, actfn, ins):
              for oidx in range(och // 4)]
     prelude(ps, ins, loadfn=True, save=texs, multiout=True, signed=(ps == 'down'))
     cent = r // 2
-    S(f'\tint i;')
     for iidx in range(max(ich // 4, 1)):
         f1 = ins == ['INPUT']
         stype = 'min16float4' if not f1 else 'min16float'
         r2 = r * r
-        S(f'\t{stype} s{iidx}[{r2}] = ', end='')
-        S('{' + ', '.join((['0.0'] if f1 else ['min16float4(0.0, 0.0, 0.0, 0.0)']) * r2)+ '};')
-        S(f'\ti = 0;')
-        S(f'\tfor (float y = {-cent}.0; y < {cent + 1}.0; y += 1.0) ', end = '')
-        S(f'for (float x = {-cent}.0; x < {cent + 1}.0; x += 1.0) ', end = '')
-        S(f's{iidx}[i++] = l{iidx}(x, y);')
+        S(f'\t{stype} s{iidx}[{r2}] = {openbr}', end='')
+        ls = ''
+        for y in range(r):
+            for x in range(r):
+                ls += f'l{iidx}({x - cent}.0, {y - cent}.0),'
+        S(f'{ls[:-1]}{closebr};')
     for oidx in range(och // 4):
-        S(f'\tmin16float4 r{oidx} = 0.0;')
+        S(f'\tfloat4 r{oidx} = 0.0;')
     for oidx in range(och // 4):
         for iidx in range(max(ich // 4, 1)):
             for y in range(r):
