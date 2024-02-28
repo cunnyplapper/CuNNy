@@ -24,7 +24,7 @@ def weight(ws, x, y, ich, och, r, iidx, oidx):
     w = [str(v.item()) for v in ws[(4*oidx):(4*(1+oidx)), (4*iidx):(4*(1+iidx)),
                                    y, x].swapdims(0, 1).flatten()]
     wflat = ", ".join(w)
-    l = f's{iidx}[{y * r + x}]'
+    l = f's{iidx}_{y * r + x}'
     if len(w) > 4:
         S(f'mul({l}, min16float4x4({wflat}));')
     else:
@@ -66,7 +66,7 @@ def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None,
     if upscale:
         S(f'//!STYLE PS')
     else:
-        S(f'//!BLOCK_SIZE 16')
+        S(f'//!BLOCK_SIZE 8')
         S(f'//!NUM_THREADS 64')
     S(f'//!IN ' + ', '.join(ins))
     S(f'//!OUT {", ".join(save) if save else "OUTPUT"}')
@@ -102,21 +102,6 @@ def skele():
     S('\tfloat2 pos = (gxy + 0.5) * GetInputPt();')
     S('\tfloat2 step = 8 * GetInputPt();')
     S('\thook(gxy, pos);')
-    S('\tgxy.x += 8u;')
-    S('\tpos.x += step.x;')
-    S('\tif (gxy.x < size.x || gxy.y < size.y) {')
-    S('\t\thook(gxy, pos);')
-    S('\t}')
-    S('\tgxy.y += 8u;')
-    S('\tpos.y += step.y;')
-    S('\tif (gxy.x < size.x || gxy.y < size.y) {')
-    S('\t\thook(gxy, pos);')
-    S('\t}')
-    S('\tgxy.x -= 8u;')
-    S('\tpos.x -= step.x;')
-    S('\tif (gxy.x < size.x || gxy.y < size.y) {')
-    S('\t\thook(gxy, pos);')
-    S('\t}')
     S(f'{closebr}\n')
 
 def write(ps, k, actfn, ins):
@@ -132,13 +117,11 @@ def write(ps, k, actfn, ins):
     for iidx in range(max(ich // 4, 1)):
         f1 = ins == ['INPUT']
         stype = 'min16float4' if not f1 else 'min16float'
-        r2 = r * r
-        S(f'\t{stype} s{iidx}[{r2}] = {openbr}', end='')
-        ls = ''
+        i = 0
         for y in range(r):
             for x in range(r):
-                ls += f'l{iidx}({x - cent}.0, {y - cent}.0),'
-        S(f'{ls[:-1]}{closebr};')
+                S(f'\t{stype} s{iidx}_{i} = l{iidx}({x - cent}.0, {y - cent}.0);')
+                i += 1
     for oidx in range(och // 4):
         S(f'\tfloat4 r{oidx} = 0.0;')
     for oidx in range(och // 4):
@@ -150,9 +133,7 @@ def write(ps, k, actfn, ins):
         if bn in m:
             b = [str(v.item()) for v in m[bn][4*oidx:4*(oidx+1)]]
             S(f'\tr{oidx} += float4({", ".join(b)});')
-        S(f'\tr{oidx} = {actfn.replace("X", f"r{oidx}")};')
-    for i, tex in enumerate(texs):
-        S(f'\t{tex}[gxy] = r{i};')
+        S(f'\t{texs[oidx]}[gxy] = {actfn.replace("X", f"r{oidx}")};')
     S(f'{closebr}')
     skele()
     return texs
