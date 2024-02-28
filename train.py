@@ -95,7 +95,7 @@ rcas = False
 if not os.path.isdir(fsr):
     fsr = next(f for f in os.listdir('in') if 'rcas-' in f)
     rcas = True
-dataset = Dataset('in/64', 'in/' + fsr, 'in/128', transform)
+dataset = Dataset('in/64', fsr, 'in/128', transform)
 dataloader = torch.utils.data.DataLoader(dataset, batch_size=B, shuffle=True)
 
 model = Net().to(dev)
@@ -141,7 +141,7 @@ while os.path.exists((fn := f'models/{N}x{D}-{suf}{i}.pt')):
     i += 1
 sd = model.state_dict()
 if rcas:
-    sd['sharpness'] = float(fsr.replace('rcas-', ''))
+    sd['sharpness'] = float(fsr.replace('in/rcas-', ''))
 torch.save(sd, fn)
 print(f'saved to {fn}')
 with open('test/last.txt', 'w') as f:
