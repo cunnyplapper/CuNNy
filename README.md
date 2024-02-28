@@ -7,9 +7,9 @@ Currently very new and immature 😭.
 
 Supports exporting to an mpv ~~meme~~shader!
 
-# Usage
+And now a Magpie effect!
 
-Use them like any other mpv usershader.
+# Usage
 
 The order of best quality -> worst quality is `3x32` -> `2x32` -> `1x32` ->
 `1x16` -> `1x8` -> `1x4` -> `0x4`.
@@ -19,10 +19,11 @@ being the fastest and `3x32` being the slowest.
 
 Variants:
 - `RCAS`: Provide slightly sharper results for a very small cost in performance
-(which becomes negligible the bigger the model).
-- `DS`: Trained on images downsampled with Hermite and compressed to JPEG
-quality 75. It's kinda splodgy, but seems okay on some shows.
-- `NVL`: Trained on visual novel screenshots and CG.
+  (which becomes negligible the bigger the model).
+- `DS`: Trained on images downsampled with Hermite and compressed to JPEG quality
+  75. It's kinda splodgy, but seems okay on some shows.
+- `NVL`: Trained on VN screenshots/CG. Will retrain soon with better dataset.
+  But even in it's current state it's probably the best for that.
 
 # Training
 
@@ -36,7 +37,10 @@ To train `py train.py <N> <D>` where `N` is the number of internal convolutions
 and `D` is the number of feature layers.
 
 Convert the resulting model to an mpv shader by running
-`py convert.py <models/model.pt>`.
+`py mpv.py <models/model.pt>`.
+
+Convert the resulting model to a Magpie effect by running
+`py mpv.py <models/model.pt>`.
 
 Trains very fast on my machine.
 
