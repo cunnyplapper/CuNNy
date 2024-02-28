@@ -45,7 +45,7 @@ def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None):
     S(f'\tvec4 r = vec4(0.0);')
 
 def out(ps, k, actfn, ins, ws, ich, och, r, oidx):
-    ps = f'{ps}:{oidx}'
+    ps = f'{ps}' + (f':{oidx}' if ps != 'down' else '')
     tex = ps.replace(':', '_')
     prelude(ps, ins, loadfn=True, save=tex)
     for iidx in range(max(ich // 4, 1)):
@@ -258,7 +258,7 @@ rcas = """//!DESC CuNNy-RCAS
 //!COMPONENTS 1
 
 // CuNNy: do not change unless changed during training as well
-#define SHARPNESS 1.0
+#define SHARPNESS 2.0
 #define FSR_RCAS_LIMIT (0.25 - (1.0 / 16.0))
 
 float APrxMedRcpF1(float a) {
@@ -354,9 +354,9 @@ for k_ in m:
         texs = write('down', k_, 'tanh(r)', texs)
 
 prelude('shuffle', [*texs, fsrtex], ch=1, upscale=2)
-S(f'\tvec2 f = fract(down_0_pos * down_0_size);')
+S(f'\tvec2 f = fract(down_pos * down_size);')
 S(f'\tivec2 i = ivec2(f * vec2(2.0));')
-S(f'\tr.r = down_0_tex((vec2(0.5) - f) * down_0_pt + down_0_pos)[2*i.y + i.x];')
+S(f'\tr.r = down_tex((vec2(0.5) - f) * down_pt + down_pos)[2*i.y + i.x];')
 S(f'\tr.r += {fsrtex}_tex({fsrtex}_pos).r;')
 S(f'\tr.a = 1.0;')
 S(f'\treturn clamp(r, 0.0, 1.0);')

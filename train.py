@@ -22,7 +22,7 @@ E = 1000
 # batch size
 B = 64
 # learning rate
-LR = 0.00005
+LR = 0.00007
 # max learning rate (with OneCycleLR)
 MAX_LR = 0.003
 
