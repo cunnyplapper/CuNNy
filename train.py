@@ -87,13 +87,13 @@ class Dataset(torch.utils.data.Dataset):
         return len(self.files)
 
     def __getitem__(self, idx):
-        return self.x[idx], self.y[idx], self.true[idx]
+        return self.x[idx], self.y[idx], self.true[idx], self.files[idx]
 
 transform = transforms.Compose([transforms.ToTensor()])
 fsr = 'in/easu'
 rcas = False
 if not os.path.isdir(fsr):
-    fsr = 'in/' + next(f for f in os.listdir('in') if 'rcas-' in f)
+    fsr = next(f for f in os.listdir('in') if 'rcas-' in f)
     rcas = True
 dataset = Dataset('in/64', fsr, 'in/128', transform)
 dataloader = torch.utils.data.DataLoader(dataset, batch_size=B, shuffle=True)
@@ -114,7 +114,7 @@ def fwd(x, y):
 
 def train():
     global idx, runloss, nloss
-    for i, (x, y, true) in enumerate(dataloader):
+    for i, (x, y, true, files) in enumerate(dataloader):
         opt.zero_grad()
         pred = fwd(x, y)
         loss = loss_fn(pred, true)
@@ -124,8 +124,9 @@ def train():
         runloss += loss
         nloss += 1
     with torch.no_grad():
+        psnrv = psnr(pred, true)
         print(f'[{idx + 1}/{E}] L: {(runloss / nloss):.5f} '
-              f'| psnr: {psnr(pred, true):.3f} ')
+              f'| psnr: {psnrv:.3f} ')
     nloss = 0
     runloss = 0.
     idx += 1

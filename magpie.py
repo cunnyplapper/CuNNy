@@ -72,7 +72,7 @@ def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None,
     S(f'//!OUT {", ".join(save) if save else "OUTPUT"}')
     if save:
         S('#define O(t, p) t.SampleLevel(SP, pos + p * pt, 0)')
-    c4fmt = "R8G8B8A8_SNORM" if signed else "R8G8B8A8_UNORM"
+    c4fmt = 'R16G16B16A16_FLOAT'
     for tex in save if save else []:
         header += f'//!TEXTURE\n'
         header += f'//!WIDTH INPUT_WIDTH\n'
@@ -441,7 +441,7 @@ S(f'\tfloat3 px = mul(yuv2rgb, float3(r.r, uv));')
 S(f'\treturn float4(px, 1.0);')
 S(f'{closebr}')
 
-fp = f'magpie/CuNNy-{stem}.hlsl'
+fp = f'test/CuNNy-{stem}.hlsl'
 with open(fp, 'w') as f:
     f.write(shader)
 print(fp)

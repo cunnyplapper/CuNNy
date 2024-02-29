@@ -22,8 +22,8 @@ Variants:
   (which becomes negligible the bigger the model).
 - `DS`: Trained on images downsampled with Hermite and compressed to JPEG quality
   75. It's kinda splodgy, but seems okay on some shows.
-- `NVL`: Trained on VN screenshots/CG. Will retrain soon with better dataset.
-  But even in it's current state it's probably the best for that.
+- `NVL`: Trained on VN screenshots/CG. Amazing results. Will probably work great
+   on regular artwork as well.
 
 # Training
 

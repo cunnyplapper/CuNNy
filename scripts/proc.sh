@@ -9,8 +9,7 @@ elif [ "$2" -eq 1 ]; then
 	./scripts/build.sh -DSHARPNESS=$sharpness || exit
 	folder="rcas-$sharpness"
 fi
-mkdir -p models
-mkdir -p test
+./scripts/mkfolders.sh
 mkdir in &&
 cp -r $1 in/128 &&
 mkdir in/64 && mogrify -colorspace Gray -path in/64 -filter Box -resize 50% in/128/* &&
