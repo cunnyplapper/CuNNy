@@ -26,9 +26,9 @@ def weight(ws, x, y, ich, och, r, iidx, oidx):
     wflat = ", ".join(w)
     l = f's{iidx}_{y * r + x}'
     if len(w) > 4:
-        S(f'mul({l}, min16float4x4({wflat}));')
+        S(f'mul({l}, float4x4({wflat}));')
     else:
-        S(f'min16float4({wflat}) * {l};')
+        S(f'float4({wflat}) * {l};')
 
 header = """//!MAGPIE EFFECT
 //!VERSION 3
@@ -113,7 +113,7 @@ def write(ps, k, actfn, ins):
     cent = r // 2
     for iidx in range(max(ich // 4, 1)):
         f1 = ins == ['INPUT']
-        stype = 'min16float4' if not f1 else 'min16float'
+        stype = 'float4' if not f1 else 'float'
         i = 0
         for y in range(r):
             for x in range(r):
