@@ -1,4 +1,5 @@
 # converts the CuNNy model to an MagpieFX effect
+# this code sucks, maybe tidy up one day™..
 import torch
 import sys
 from pathlib import Path
@@ -20,15 +21,16 @@ def S(txt, end='\n'):
     shader += txt + end
 
 def weight(ws, x, y, ich, och, r, iidx, oidx):
-    S(f'\tr{oidx} += ', end='')
+    s = f'\tr += '
     w = [str(v.item()) for v in ws[(4*oidx):(4*(1+oidx)), (4*iidx):(4*(1+iidx)),
                                    y, x].swapdims(0, 1).flatten()]
     wflat = ", ".join(w)
     l = f's{iidx}_{y * r + x}'
     if len(w) > 4:
-        S(f'mul({l}, float4x4({wflat}));')
+        s += f'mul({l}, float4x4({wflat}));\n'
     else:
-        S(f'float4({wflat}) * {l};')
+        s += f'float4({wflat}) * {l};\n'
+    return s
 
 header = """//!MAGPIE EFFECT
 //!VERSION 3
@@ -53,6 +55,7 @@ SamplerState SP;
 SamplerState SL;
 
 """
+
 npass = 2 if usercas else 1
 def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None,
             multiout=False, signed=False):
@@ -85,21 +88,7 @@ def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None,
             S(f'#define l{i}(x, y) {fn}')
     if upscale:
         S(f'float4 Pass{npass}(float2 pos) {openbr}')
-    else:
-        S(f'void hook(uint2 gxy, float2 pos) {openbr}')
-    S(f'\tfloat2 pt = float2(GetInputPt());')
-
-def skele():
-    S(f'void Pass{npass}(uint2 blockStart, uint3 tid) {openbr}')
-    S('\tuint2 gxy = Rmp8x8(tid.x) + blockStart;')
-    S('\tuint2 size = GetInputSize();')
-    S('\tif (gxy.x >= size.x || gxy.y >= size.y) {')
-    S('\t\treturn;')
-    S('\t};')
-    S('\tfloat2 pos = (gxy + 0.5) * GetInputPt();')
-    S('\tfloat2 step = 8 * GetInputPt();')
-    S('\thook(gxy, pos);')
-    S(f'{closebr}\n')
+        S(f'\tfloat2 pt = float2(GetInputPt());')
 
 def write(ps, k, actfn, ins):
     ws = m[k+'weight']
@@ -110,29 +99,44 @@ def write(ps, k, actfn, ins):
     texs = [f'{ps}' + (f'_{oidx}' if ps != 'down' else '')
              for oidx in range(och // 4)]
     prelude(ps, ins, loadfn=True, save=texs, multiout=True, signed=(ps == 'down'))
+    global shader
+    start = len(shader)
+    S(f'void Pass{npass}(uint2 blockStart, uint3 tid) {openbr}')
+    S(f'\tfloat2 pt = float2(GetInputPt());')
+    S('\tuint2 gxy = Rmp8x8(tid.x) + blockStart;')
+    S('\tuint2 size = GetInputSize();')
+    S('\tif (gxy.x >= size.x || gxy.y >= size.y) {')
+    S('\t\treturn;')
+    S('\t}')
+    S('\tfloat2 pos = (gxy + 0.5) * pt;')
     cent = r // 2
+    stype = 'float4' if not ins == ['INPUT'] else 'float'
+    vs = []
     for iidx in range(max(ich // 4, 1)):
-        f1 = ins == ['INPUT']
-        stype = 'float4' if not f1 else 'float'
         i = 0
         for y in range(r):
             for x in range(r):
-                S(f'\t{stype} s{iidx}_{i} = l{iidx}({x - cent}.0, {y - cent}.0);')
+                v = f's{iidx}_{i}'
+                S(f'\t{stype} {v} = l{iidx}({x - cent}.0, {y - cent}.0);')
+                vs += [v]
                 i += 1
+    wfns = ''
     for oidx in range(och // 4):
-        S(f'\tfloat4 r{oidx} = 0.0;')
-    for oidx in range(och // 4):
+        wfns += f'float4 f{oidx}(float2 pt, float2 pos, {", ".join(f"{stype} {v}" for v in vs)}) {openbr}\n'
+        wfns += f'\tfloat4 r = 0.0;\n'
         for iidx in range(max(ich // 4, 1)):
             for y in range(r):
                 for x in range(r):
-                    weight(ws, x, y, ich, och, r, iidx, oidx)
+                    wfns += weight(ws, x, y, ich, och, r, iidx, oidx)
         bn = k + 'bias'
         if bn in m:
             b = [str(v.item()) for v in m[bn][4*oidx:4*(oidx+1)]]
-            S(f'\tr{oidx} += float4({", ".join(b)});')
-        S(f'\t{texs[oidx]}[gxy] = {actfn.replace("X", f"r{oidx}")};')
+            wfns += f'\tr += float4({", ".join(b)});\n'
+        wfns += f'\treturn {actfn.replace("X", f"r")};\n'
+        wfns += closebr + '\n'
+        S(f'\t{texs[oidx]}[gxy] = f{oidx}(pt, pos, {", ".join(vs)});')
     S(f'{closebr}')
-    skele()
+    shader = shader[:start] + wfns + shader[start:]
     return texs
 
 easu = """// FSR mpv | modified
