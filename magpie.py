@@ -31,15 +31,12 @@ def weight(ws, x, y, ich, och, r, iidx, oidx):
         S(f'min16float4({wflat}) * {l};')
 
 header = """//!MAGPIE EFFECT
-//!VERSION 4
+//!VERSION 3
+//!OUTPUT_WIDTH INPUT_WIDTH * 2
+//!OUTPUT_HEIGHT INPUT_HEIGHT * 2
 
 //!TEXTURE
 Texture2D INPUT;
-
-//!TEXTURE
-//!WIDTH INPUT_WIDTH * 2
-//!HEIGHT INPUT_HEIGHT * 2
-Texture2D OUTPUT;
 
 //!TEXTURE
 //!WIDTH INPUT_WIDTH * 2
@@ -61,16 +58,16 @@ def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None,
             multiout=False, signed=False):
     global header, npass
     npass += 1
-    S(f'//!DESC CuNNy-{version}-{ps}')
     S(f'//!PASS {npass}')
+    S(f'//!DESC CuNNy-{version}-{ps}')
     if upscale:
         S(f'//!STYLE PS')
     else:
         S(f'//!BLOCK_SIZE 8')
         S(f'//!NUM_THREADS 64')
     S(f'//!IN ' + ', '.join(ins))
-    S(f'//!OUT {", ".join(save) if save else "OUTPUT"}')
     if save:
+        S(f'//!OUT {", ".join(save) if save else "OUTPUT"}')
         S('#define O(t, p) t.SampleLevel(SP, pos + p * pt, 0)')
     c4fmt = 'R16G16B16A16_FLOAT'
     for tex in save if save else []:

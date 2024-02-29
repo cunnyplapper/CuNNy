@@ -16,15 +16,12 @@
 /* ------------------------------------------------------------------- */
 
 //!MAGPIE EFFECT
-//!VERSION 4
+//!VERSION 3
+//!OUTPUT_WIDTH INPUT_WIDTH * 2
+//!OUTPUT_HEIGHT INPUT_HEIGHT * 2
 
 //!TEXTURE
 Texture2D INPUT;
-
-//!TEXTURE
-//!WIDTH INPUT_WIDTH * 2
-//!HEIGHT INPUT_HEIGHT * 2
-Texture2D OUTPUT;
 
 //!TEXTURE
 //!WIDTH INPUT_WIDTH * 2
@@ -229,8 +226,8 @@ float4 Pass1(float2 pos) {
 	return pix;
 }
 
-//!DESC CuNNy-0x4-NVL-up
 //!PASS 2
+//!DESC CuNNy-0x4-NVL-up
 //!BLOCK_SIZE 8
 //!NUM_THREADS 64
 //!IN INPUT
@@ -272,8 +269,8 @@ void Pass2(uint2 blockStart, uint3 tid) {
 	hook(gxy, pos);
 }
 
-//!DESC CuNNy-0x4-NVL-down
 //!PASS 3
+//!DESC CuNNy-0x4-NVL-down
 //!BLOCK_SIZE 8
 //!NUM_THREADS 64
 //!IN up_0
@@ -315,11 +312,10 @@ void Pass3(uint2 blockStart, uint3 tid) {
 	hook(gxy, pos);
 }
 
-//!DESC CuNNy-0x4-NVL-shuffle
 //!PASS 4
+//!DESC CuNNy-0x4-NVL-shuffle
 //!STYLE PS
 //!IN down, easu, INPUT
-//!OUT OUTPUT
 float4 Pass4(float2 pos) {
 	float2 pt = float2(GetInputPt());
 	const static float2x3 rgb2uv = {-0.169, -0.331, 0.5, 0.5, -0.419, -0.081};

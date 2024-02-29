@@ -16,15 +16,12 @@
 /* ------------------------------------------------------------------- */
 
 //!MAGPIE EFFECT
-//!VERSION 4
+//!VERSION 3
+//!OUTPUT_WIDTH INPUT_WIDTH * 2
+//!OUTPUT_HEIGHT INPUT_HEIGHT * 2
 
 //!TEXTURE
 Texture2D INPUT;
-
-//!TEXTURE
-//!WIDTH INPUT_WIDTH * 2
-//!HEIGHT INPUT_HEIGHT * 2
-Texture2D OUTPUT;
 
 //!TEXTURE
 //!WIDTH INPUT_WIDTH * 2
@@ -367,8 +364,8 @@ float4 Pass1(float2 pos) {
 	return pix;
 }
 
-//!DESC CuNNy-2x32-NVL-up
 //!PASS 2
+//!DESC CuNNy-2x32-NVL-up
 //!BLOCK_SIZE 8
 //!NUM_THREADS 64
 //!IN INPUT
@@ -494,8 +491,8 @@ void Pass2(uint2 blockStart, uint3 tid) {
 	hook(gxy, pos);
 }
 
-//!DESC CuNNy-2x32-NVL-conv1
 //!PASS 3
+//!DESC CuNNy-2x32-NVL-conv1
 //!BLOCK_SIZE 8
 //!NUM_THREADS 64
 //!IN up_0, up_1, up_2, up_3, up_4, up_5, up_6, up_7
@@ -1195,8 +1192,8 @@ void Pass3(uint2 blockStart, uint3 tid) {
 	hook(gxy, pos);
 }
 
-//!DESC CuNNy-2x32-NVL-conv2
 //!PASS 4
+//!DESC CuNNy-2x32-NVL-conv2
 //!BLOCK_SIZE 8
 //!NUM_THREADS 64
 //!IN conv1_0, conv1_1, conv1_2, conv1_3, conv1_4, conv1_5, conv1_6, conv1_7
@@ -1896,8 +1893,8 @@ void Pass4(uint2 blockStart, uint3 tid) {
 	hook(gxy, pos);
 }
 
-//!DESC CuNNy-2x32-NVL-down
 //!PASS 5
+//!DESC CuNNy-2x32-NVL-down
 //!BLOCK_SIZE 8
 //!NUM_THREADS 64
 //!IN conv2_0, conv2_1, conv2_2, conv2_3, conv2_4, conv2_5, conv2_6, conv2_7
@@ -2072,11 +2069,10 @@ void Pass5(uint2 blockStart, uint3 tid) {
 	hook(gxy, pos);
 }
 
-//!DESC CuNNy-2x32-NVL-shuffle
 //!PASS 6
+//!DESC CuNNy-2x32-NVL-shuffle
 //!STYLE PS
 //!IN down, easu, INPUT
-//!OUT OUTPUT
 float4 Pass6(float2 pos) {
 	float2 pt = float2(GetInputPt());
 	const static float2x3 rgb2uv = {-0.169, -0.331, 0.5, 0.5, -0.419, -0.081};

@@ -16,15 +16,12 @@
 /* ------------------------------------------------------------------- */
 
 //!MAGPIE EFFECT
-//!VERSION 4
+//!VERSION 3
+//!OUTPUT_WIDTH INPUT_WIDTH * 2
+//!OUTPUT_HEIGHT INPUT_HEIGHT * 2
 
 //!TEXTURE
 Texture2D INPUT;
-
-//!TEXTURE
-//!WIDTH INPUT_WIDTH * 2
-//!HEIGHT INPUT_HEIGHT * 2
-Texture2D OUTPUT;
 
 //!TEXTURE
 //!WIDTH INPUT_WIDTH * 2
@@ -271,8 +268,8 @@ float4 Pass1(float2 pos) {
 	return pix;
 }
 
-//!DESC CuNNy-1x16-NVL-up
 //!PASS 2
+//!DESC CuNNy-1x16-NVL-up
 //!BLOCK_SIZE 8
 //!NUM_THREADS 64
 //!IN INPUT
@@ -350,8 +347,8 @@ void Pass2(uint2 blockStart, uint3 tid) {
 	hook(gxy, pos);
 }
 
-//!DESC CuNNy-1x16-NVL-conv1
 //!PASS 3
+//!DESC CuNNy-1x16-NVL-conv1
 //!BLOCK_SIZE 8
 //!NUM_THREADS 64
 //!IN up_0, up_1, up_2, up_3
@@ -567,8 +564,8 @@ void Pass3(uint2 blockStart, uint3 tid) {
 	hook(gxy, pos);
 }
 
-//!DESC CuNNy-1x16-NVL-down
 //!PASS 4
+//!DESC CuNNy-1x16-NVL-down
 //!BLOCK_SIZE 8
 //!NUM_THREADS 64
 //!IN conv1_0, conv1_1, conv1_2, conv1_3
@@ -667,11 +664,10 @@ void Pass4(uint2 blockStart, uint3 tid) {
 	hook(gxy, pos);
 }
 
-//!DESC CuNNy-1x16-NVL-shuffle
 //!PASS 5
+//!DESC CuNNy-1x16-NVL-shuffle
 //!STYLE PS
 //!IN down, easu, INPUT
-//!OUT OUTPUT
 float4 Pass5(float2 pos) {
 	float2 pt = float2(GetInputPt());
 	const static float2x3 rgb2uv = {-0.169, -0.331, 0.5, 0.5, -0.419, -0.081};
