@@ -11,6 +11,7 @@ D = next(m[x] for x in m if 'up' in x and 'weight' in x).size(dim=0)
 stem = Path(sys.argv[1]).stem
 version = stem[:stem.rfind('-')]
 usercas = 'RCAS' in stem
+usefsr = 'BILINEAR' not in stem
 
 # thanks vim
 openbr = '{'
@@ -27,9 +28,9 @@ def weight(ws, x, y, ich, och, r, iidx, oidx):
     wflat = ", ".join(w)
     l = f's{iidx}_{y * r + x}'
     if len(w) > 4:
-        s += f'mul({l}, float4x4({wflat}));\n'
+        s += f'mul({l}, min16float4x4({wflat}));\n'
     else:
-        s += f'float4({wflat}) * {l};\n'
+        s += f'min16float4({wflat}) * {l};\n'
     return s
 
 header = """//!MAGPIE EFFECT
@@ -40,12 +41,7 @@ header = """//!MAGPIE EFFECT
 //!TEXTURE
 Texture2D INPUT;
 
-//!TEXTURE
-//!WIDTH INPUT_WIDTH * 2
-//!HEIGHT INPUT_HEIGHT * 2
-//!FORMAT R16_FLOAT
-Texture2D __FSR__;
-
+__FSR__
 //!SAMPLER
 //!FILTER POINT
 SamplerState SP;
@@ -56,7 +52,7 @@ SamplerState SL;
 
 """
 
-npass = 2 if usercas else 1
+npass = (2 if usercas else 1) if usefsr else 0
 def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None,
             multiout=False, signed=False):
     global header, npass
@@ -72,12 +68,15 @@ def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None,
     if save:
         S(f'//!OUT {", ".join(save) if save else "OUTPUT"}')
         S('#define O(t, p) t.SampleLevel(SP, pos + p * pt, 0)')
-    c4fmt = 'R16G16B16A16_FLOAT'
+    if signed:
+        c4fmt = 'R8G8B8A8_SNORM'
+    else:
+        c4fmt = 'R8G8B8A8_UNORM'
     for tex in save if save else []:
         header += f'//!TEXTURE\n'
         header += f'//!WIDTH INPUT_WIDTH\n'
         header += f'//!HEIGHT INPUT_HEIGHT\n'
-        header += f'//!FORMAT {"R16_FLOAT" if ch == 1 else c4fmt}\n'
+        header += f'//!FORMAT {"R8_UNORM" if ch == 1 else c4fmt}\n'
         header += f'Texture2D {tex};\n'
         header += f'\n'
     if loadfn:
@@ -110,7 +109,7 @@ def write(ps, k, actfn, ins):
     S('\t}')
     S('\tfloat2 pos = (gxy + 0.5) * pt;')
     cent = r // 2
-    stype = 'float4' if not ins == ['INPUT'] else 'float'
+    stype = 'min16float4' if not ins == ['INPUT'] else 'min16float'
     vs = []
     for iidx in range(max(ich // 4, 1)):
         i = 0
@@ -123,7 +122,7 @@ def write(ps, k, actfn, ins):
     wfns = ''
     for oidx in range(och // 4):
         wfns += f'float4 f{oidx}(float2 pt, float2 pos, {", ".join(f"{stype} {v}" for v in vs)}) {openbr}\n'
-        wfns += f'\tfloat4 r = 0.0;\n'
+        wfns += f'\tmin16float4 r = 0.0;\n'
         for iidx in range(max(ich // 4, 1)):
             for y in range(r):
                 for x in range(r):
@@ -164,6 +163,7 @@ easu = """// FSR mpv | modified
 // ported to mpv by agyild
 
 //!PASS 1
+//!DESC CuNNy-EASU
 //!STYLE PS
 //!IN INPUT
 //!OUT easu
@@ -317,20 +317,18 @@ float4 Pass1(float2 pos) {
 }
 """
 
-rcas = """//!DESC CuNNy-RCAS
-//!HOOK LUMA
-//!BIND easu
-//!SAVE rcas
-//!WIDTH easu.w
-//!HEIGHT easu.h
-//!COMPONENTS 1
+rcas = """//!PASS 2
+//!DESC CuNNy-RCAS
+//!STYLE PS
+//!IN easu
+//!OUT rcas
 
 // CuNNy: do not change unless changed during training as well
 #define SHARPNESS __SHARPNESS__
 #define FSR_RCAS_LIMIT (0.25 - (1.0 / 16.0))
 
 float APrxMedRcpF1(float a) {
-	float b = uintBitsToFloat(uint(0x7ef19fff) - floatBitsToUint(a));
+	float b = asfloat(uint(0x7ef19fff) - asuint(a));
 	return b * (-b * a + 2.0);
 }
 
@@ -343,25 +341,19 @@ float AMin3F1(float x, float y, float z) {
 	return min(x, min(y, z));
 }
 
-vec4 hook() {
-#if (defined(easu_gather) && (__VERSION__ >= 400 || (GL_ES && __VERSION__ >= 310)))
-	vec3 bde = easu_gather(easu_pos + easu_pt * vec2(-0.5), 0).xyz;
+float4 Pass2(float2 pos) {
+	float2 pt = float2(GetInputPt());
+	float2 size = float2(GetInputSize());
+	float3 bde = easu.Gather(SP, pos + pt * float2(-0.5, -0.5), 0).xyz;
 	float b = bde.z;
 	float d = bde.x;
 	float e = bde.y;
-	vec2 fh = easu_gather(easu_pos + easu_pt * vec2(0.5), 0).zx;
+	float2 fh = easu.Gather(SP, pos + pt * float2(0.5, 0.5), 0).zx;
 	float f = fh.x;
 	float h = fh.y;
-#else
-	float b = easu_texOff(vec2( 0.0, -1.0)).r;
-	float d = easu_texOff(vec2(-1.0,  0.0)).r;
-	float e = easu_tex(easu_pos).r;
-	float f = easu_texOff(vec2(1.0, 0.0)).r;
-	float h = easu_texOff(vec2(0.0, 1.0)).r;
-#endif
 	float mn1L = min(AMin3F1(b, d, f), h);
 	float mx1L = max(AMax3F1(b, d, f), h);
-	vec2 peakC = vec2(1.0, -1.0 * 4.0);
+	float2 peakC = float2(1.0, -1.0 * 4.0);
 	float hitMinL = min(mn1L, e) / (4.0 * mx1L);
 	float hitMaxL = (peakC.x - max(mx1L, e)) / (4.0 * mn1L + peakC.y);
 	float lobeL = max(-hitMinL, hitMaxL);
@@ -371,7 +363,7 @@ vec4 hook() {
 	nz = -0.5 * nz + 1.0;
 	lobe *= nz;
 	float rcpL = APrxMedRcpF1(4.0 * lobe + 1.0);
-	vec4 pix = vec4(0.0, 0.0, 0.0, 1.0);
+	float4 pix = float4(0.0, 0.0, 0.0, 1.0);
 	pix.r = float((lobe * b + lobe * d + lobe * h + lobe * f + e) * rcpL);
 	return pix;
 }
@@ -399,12 +391,12 @@ S('/* ------------------------------------------------------------------- */\n')
 header = shader + header
 shader = ''
 
-fsrtex = 'easu'
-S(easu)
-
+if usefsr:
+    fsrtex = 'easu'
+    S(easu)
 if usercas:
     fsrtex = 'rcas'
-    S(rcas.replace('__SHARPNESS__', str(m['sharpness'])))
+    S(rcas.replace('__SHARPNESS__', '2.0'))
 
 texs = ['INPUT']
 nconv = 1
@@ -425,20 +417,33 @@ for k_ in m:
     elif k.startswith('down'):
         texs = write('down', k_, 'tanh(X)', texs)
 
-shader = header.replace('__FSR__', fsrtex) + shader
-prelude('shuffle', [*texs, fsrtex, 'INPUT'], ch=1, upscale=2)
-S('\tconst static float2x3 rgb2uv = {-0.169, -0.331, 0.5, 0.5, -0.419, -0.081};')
+fsrhdrbase = """//!TEXTURE
+//!WIDTH INPUT_WIDTH * 2
+//!HEIGHT INPUT_HEIGHT * 2
+//!FORMAT R8_UNORM
+Texture2D """
+
+fsrhdr = fsrhdrbase + 'easu;\n'
+if usercas:
+    fsrhdr += '\n' + fsrhdrbase + 'rcas;\n'
+
+shader = header.replace('__FSR__', fsrhdr if usefsr else '') + shader
+prelude('shuffle', [*texs, 'INPUT'] + ([fsrtex] if usefsr else []), ch=1, upscale=2)
+S('\tconst static float3x3 rgb2yuv = {0.299, 0.587, 0.114, -0.169, -0.331, 0.5, 0.5, -0.419, -0.081};')
 S('\tconst static float3x3 yuv2rgb = {1, -0.00093, 1.401687, 1, -0.3437, -0.71417, 1, 1.77216, 0.00099};')
 S(f'\tfloat4 r = 0.0;')
 S(f'\tfloat2 size = float2(GetInputSize());')
 S(f'\tfloat2 f = frac(pos * size);')
+S(f'\tfloat3 yuv = mul(rgb2yuv, INPUT.SampleLevel(SL, pos, 0).rgb);')
 S(f'\tint2 i = int2(f * 2.0);')
 S(f'\tr.r = down.SampleLevel(SP, (float2(0.5, 0.5) - f) * pt + pos, 0)[2*i.y + i.x];')
-S(f'\tr.r += {fsrtex}.SampleLevel(SP, pos, 0).r;')
+if usefsr:
+    S(f'\tr.r += {fsrtex}.SampleLevel(SP, pos, 0).r;')
+else:
+    S(f'\tr.r += yuv.r;')
 S(f'\tr.a = 1.0;')
 S(f'\tr.r = clamp(r, 0.0, 1.0);')
-S(f'\tfloat2 uv = mul(rgb2uv, INPUT.SampleLevel(SL, pos, 0).rgb);')
-S(f'\tfloat3 px = mul(yuv2rgb, float3(r.r, uv));')
+S(f'\tfloat3 px = mul(yuv2rgb, float3(r.r, yuv.yz));')
 S(f'\treturn float4(px, 1.0);')
 S(f'{closebr}')
 

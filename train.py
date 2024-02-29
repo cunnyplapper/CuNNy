@@ -80,7 +80,11 @@ class Dataset(torch.utils.data.Dataset):
     def __init__(self, dirx, diry, dirtrue, transform):
         self.files = os.listdir(dirtrue)
         self.x = [load(dirx, file, transform) for file in self.files]
-        self.y = [load(diry, file, transform) for file in self.files]
+        if diry:
+            self.y = [load(diry, file, transform) for file in self.files]
+        else:
+            self.y = [F.interpolate(x.unsqueeze(dim=0), scale_factor=2, mode='bilinear',
+                                    align_corners=False).squeeze(dim=0) for x in self.x]
         self.true = [load(dirtrue, file, transform) for file in self.files]
 
     def __len__(self):
@@ -93,8 +97,12 @@ transform = transforms.Compose([transforms.ToTensor()])
 fsr = 'in/easu'
 rcas = False
 if not os.path.isdir(fsr):
-    fsr = next(f for f in os.listdir('in') if 'rcas-' in f)
-    rcas = True
+    folder = next((f for f in os.listdir('in') if f.startswith('rcas-')), None)
+    if folder:
+        fsr = 'in/' + next(f for f in os.listdir('in') if 'rcas-' in f)
+        rcas = True
+    else:
+        fsr = None
 dataset = Dataset('in/64', fsr, 'in/128', transform)
 dataloader = torch.utils.data.DataLoader(dataset, batch_size=B, shuffle=True)
 
@@ -137,7 +145,8 @@ with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
 
 i = 0
 fn = ''
-suf = ('RCAS-' if rcas else '') + (args.suffix + '-' if args.suffix else '')
+suf = (('RCAS-' if rcas else 'BILINEAR-' if fsr is None else '')
+    + (args.suffix + '-' if args.suffix else ''))
 while os.path.exists((fn := f'models/{N}x{D}-{suf}{i}.pt')):
     i += 1
 sd = model.state_dict()
