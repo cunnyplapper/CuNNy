@@ -12,6 +12,7 @@ stem = Path(sys.argv[1]).stem
 version = stem[:stem.rfind('-')]
 usercas = 'RCAS' in stem
 usefsr = 'BILINEAR' not in stem
+crelu = m['crelu']
 
 # thanks vim
 openbr = '{'
@@ -68,10 +69,7 @@ def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None,
     if save:
         S(f'//!OUT {", ".join(save) if save else "OUTPUT"}')
         S('#define O(t, p) t.SampleLevel(SP, pos + p * pt, 0)')
-    if signed:
-        c4fmt = 'R8G8B8A8_SNORM'
-    else:
-        c4fmt = 'R8G8B8A8_UNORM'
+    c4fmt = 'R8G8B8A8_SNORM' if signed or crelu else 'R8G8B8A8_UNORM'
     for tex in save if save else []:
         header += f'//!TEXTURE\n'
         header += f'//!WIDTH INPUT_WIDTH\n'
@@ -92,6 +90,11 @@ def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None,
 def write(ps, k, actfn, ins):
     ws = m[k+'weight']
     sz = ws.size()
+    crelup = crelu and ins != ['INPUT']
+    if crelup:
+        ws = ws.view(sz[0], -1, 4, sz[2], sz[3])
+        half = ws.shape[1] // 2
+        ws = torch.dstack((ws[:, :half], ws[:, half:])).view(sz)
     och = sz[0]
     ich = sz[1]
     r = sz[2]
@@ -111,13 +114,27 @@ def write(ps, k, actfn, ins):
     cent = r // 2
     stype = 'min16float4' if not ins == ['INPUT'] else 'min16float'
     vs = []
-    for iidx in range(max(ich // 4, 1)):
+    for iidx in range(0, max(ich // 4, 1), 2 if crelup else 1):
         i = 0
         for y in range(r):
             for x in range(r):
                 v = f's{iidx}_{i}'
-                S(f'\t{stype} {v} = l{iidx}({x - cent}.0, {y - cent}.0);')
+                S(f'\t{stype} {v} = l{iidx // (2 if crelup else 1)}({x - cent}.0, {y - cent}.0);')
                 vs += [v]
+                i += 1
+        if not crelup:
+            continue
+        i = 0
+        for y in range(r):
+            for x in range(r):
+                v = f's{iidx + 1}_{i}'
+                S(f'\t{stype} {v} = max(-s{iidx}_{i}, 0.0);')
+                vs += [v]
+                i += 1
+        i = 0
+        for y in range(r):
+            for x in range(r):
+                S(f'\ts{iidx}_{i} = max(s{iidx}_{i}, 0.0);')
                 i += 1
     wfns = ''
     for oidx in range(och // 4):
@@ -400,6 +417,7 @@ if usercas:
 
 texs = ['INPUT']
 nconv = 1
+relu = 'max(X, 0.0)' if not crelu else 'X'
 for k_ in m:
     suf = 'weight'
     if not k_.endswith(suf):
@@ -410,9 +428,9 @@ for k_ in m:
     if k.startswith(pref):
         k = k[len(pref):-1]
     if k.startswith('up'):
-        texs = write('up', k_, 'max(X, 0.0)', texs)
+        texs = write('up', k_, relu, texs)
     elif k.startswith('conv'):
-        texs = write(f'conv{nconv}', k_, 'max(X, 0.0)', texs)
+        texs = write(f'conv{nconv}', k_, relu, texs)
         nconv += 1
     elif k.startswith('down'):
         texs = write('down', k_, 'tanh(X)', texs)
