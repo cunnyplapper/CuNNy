@@ -12,16 +12,22 @@ from torchvision import transforms
 from torcheval.metrics.functional import peak_signal_noise_ratio as psnr
 from PIL import Image
 
-dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+hascuda = torch.cuda.is_available()
+dev = torch.device('cuda' if hascuda else 'cpu')
+if hascuda:
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
 
 # epochs
 E = 500
 # batch size
 B = 64
 # learning rate
-LR = 0.00007
+LR = 0.0001
 # max learning rate (with OneCycleLR)
-MAX_LR = 0.003
+MAX_LR = 0.001
 
 parser = argparse.ArgumentParser()
 parser.add_argument('N', type=int)
@@ -31,6 +37,7 @@ parser.add_argument('-e', '--epochs', type=int, default=E)
 parser.add_argument('-b', '--batch', type=int, default=B)
 parser.add_argument('-l', '--lr', type=float, default=LR)
 parser.add_argument('-L', '--max-lr', type=float, default=MAX_LR)
+parser.add_argument('-c', '--crelu', type=bool, default=False)
 args = parser.parse_args()
 
 # internal convolutions
@@ -41,30 +48,46 @@ E = args.epochs
 B = args.batch
 LR = args.lr
 MAX_LR = args.max_lr
+CRELU = args.crelu
+
+def act(x):
+    if CRELU:
+        return torch.cat((F.relu(x), F.relu(-x)), dim=1)
+    else:
+        return F.relu(x)
 
 class Net(nn.Module):
     def __init__(self):
         super(Net, self).__init__()
+        M = 2 if CRELU else 1
         self.up = nn.Conv2d(1, D, 3, padding='same')
-        self.conv = nn.Sequential()
+        self.conv = nn.ModuleList()
         for i in range(N):
-            c = nn.Conv2d(D, D, 3, padding='same')
-            nn.init.kaiming_normal_(
-                c.weight, mode='fan_out', nonlinearity='relu')
+            c = nn.Conv2d(M * D, D, 3, padding='same')
+            if CRELU:
+                nn.init.xavier_normal_(
+                    c.weight, gain=nn.init.calculate_gain('linear'))
+            else:
+                nn.init.kaiming_normal_(
+                    c.weight, mode='fan_out', nonlinearity='relu')
             nn.init.zeros_(c.bias)
             self.conv.append(c)
-            self.conv.append(nn.ReLU())
-        self.down = nn.Conv2d(D, 4, 3, padding='same')
-        nn.init.kaiming_normal_(
-            self.up.weight, mode='fan_out', nonlinearity='relu')
+        self.down = nn.Conv2d(M * D, 4, 3, padding='same')
+        if CRELU:
+            nn.init.xavier_normal_(
+               self.up.weight, gain=nn.init.calculate_gain('linear'))
+        else:
+            nn.init.kaiming_normal_(
+               self.up.weight, mode='fan_out', nonlinearity='relu')
         nn.init.xavier_normal_(
            self.down.weight, gain=nn.init.calculate_gain('tanh'))
         nn.init.zeros_(self.up.bias)
         nn.init.zeros_(self.down.bias)
 
     def forward(self, x, y):
-        x = F.relu(self.up(x))
-        x = self.conv(x)
+        x = act(self.up(x))
+        for conv in self.conv:
+            x = act(conv(x))
         x = F.tanh(self.down(x))
         x = F.pixel_shuffle(x, 2)
         x = torch.add(x, y)
@@ -116,17 +139,18 @@ idx = 0
 nloss = 0
 runloss = 0.
 
-@torch.compile
-def fwd(x, y):
-    return model(x, y)
+@torch.compile(mode='max-autotune')
+def fwd(x, y, true):
+    pred = model(x, y)
+    loss = loss_fn(pred, true)
+    loss.backward()
+    return pred, loss
 
 def train():
     global idx, runloss, nloss
     for i, (x, y, true, files) in enumerate(dataloader):
-        opt.zero_grad()
-        pred = fwd(x, y)
-        loss = loss_fn(pred, true)
-        loss.backward()
+        opt.zero_grad(True)
+        pred, loss = fwd(x, y, true)
         opt.step()
         sched.step()
         runloss += loss
@@ -147,11 +171,14 @@ i = 0
 fn = ''
 suf = (('RCAS-' if rcas else 'BILINEAR-' if fsr is None else '')
     + (args.suffix + '-' if args.suffix else ''))
-while os.path.exists((fn := f'models/{N}x{D}-{suf}{i}.pt')):
+version = f'{N}x{D}{"C" if CRELU else ""}-{suf}'
+while os.path.exists((fn := f'models/{version}{i}.pt')):
     i += 1
 sd = model.state_dict()
 if rcas:
     sd['sharpness'] = float(fsr.replace('in/rcas-', ''))
+sd['crelu'] = CRELU
+
 torch.save(sd, fn)
 print(f'saved to {fn}')
 with open('test/last.txt', 'w') as f:

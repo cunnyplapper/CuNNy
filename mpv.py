@@ -9,6 +9,9 @@ N = sum(1 for x in m.keys() if 'conv' in x and 'weight' in x)
 D = next(m[x] for x in m if 'up' in x and 'weight' in x).size(dim=0)
 stem = Path(sys.argv[1]).stem
 version = stem[:stem.rfind('-')]
+usercas = 'RCAS' in stem
+usefsr = 'BILINEAR' not in stem
+crelu = m['crelu']
 
 # thanks vim
 openbr = '{'
@@ -23,10 +26,11 @@ def weight(ws, x, y, ich, och, r, iidx, oidx):
     S(f'\tr += ', end='')
     w = [str(v.item()) for v in ws[(4*oidx):(4*(1+oidx)), (4*iidx):(4*(1+iidx)),
                                    y, x].swapdims(0, 1).flatten()]
-    S(f'{"mat4" if len(w) > 4 else "vec4"}({", ".join(w)}) * l{iidx}'
+    S(f'{"M4" if len(w) > 4 else "V4"}({", ".join(w)}) * l{iidx}'
       f'({x - cent}.0, {y - cent}.0);')
 
 def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None):
+    S(f'')
     S(f'//!DESC CuNNy-{version}-{ps}')
     S(f'//!HOOK LUMA')
     for inv in ins:
@@ -37,12 +41,27 @@ def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None):
     S(f'//!HEIGHT LUMA.h' + (f' {upscale} *' if upscale else ''))
     S(f'//!COMPONENTS {ch}')
     S(f'//!WHEN OUTPUT.w LUMA.w / 1.3 > OUTPUT.h LUMA.h / 1.3 > *')
+    S(f'#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable')
+    S(f'#ifdef GL_EXT_shader_explicit_arithmetic_types_float16')
+    S(f'\t#define V4 f16vec4')
+    S(f'\t#define M4 f16mat4')
+    S(f'#else')
+    S(f'\t#define V4 f16vec4')
+    S(f'\t#define M4 f16mat4')
+    S(f'#endif')
     if loadfn:
         for i, inv in enumerate(ins):
             elm = '.r' if inv == 'LUMA' else ''
-            S(f'#define l{i}(x, y) {inv}_texOff(vec2(x, y)){elm}')
+            idx = 2 * i if crelu else i
+            v = f'{inv}_texOff(vec2(x, y))'
+            if crelu:
+                S(f'#define l{idx}(x, y) V4(max({v}, 0.0){elm})')
+                S(f'#define l{idx + 1}(x, y) V4(max(-{v}, 0.0){elm})')
+            else:
+                S(f'#define l{idx}(x, y) V4({v}{elm})')
     S(f'vec4 hook() {openbr}')
-    S(f'\tvec4 r = vec4(0.0);')
+    if save:
+        S(f'\tV4 r = V4(0.0);')
 
 def out(ps, k, actfn, ins, ws, ich, och, r, oidx):
     ps = f'{ps}' + (f':{oidx}' if ps != 'down' else '')
@@ -55,14 +74,19 @@ def out(ps, k, actfn, ins, ws, ich, och, r, oidx):
     bn = k + 'bias'
     if bn in m:
         b = [str(v.item()) for v in m[bn][4*oidx:4*(oidx+1)]]
-        S(f'\tr += vec4({", ".join(b)});')
-    S(f'\treturn {actfn};')
+        S(f'\tr += V4({", ".join(b)});')
+    S(f'\treturn vec4({actfn});')
     S(f'{closebr}\n')
     return tex
 
 def write(ps, k, actfn, ins):
     ws = m[k+'weight']
     sz = ws.size()
+    crelup = crelu and ins != ['LUMA']
+    if crelup:
+        ws = ws.view(sz[0], -1, 4, sz[2], sz[3])
+        half = ws.shape[1] // 2
+        ws = torch.dstack((ws[:, :half], ws[:, half:])).view(sz)
     och = sz[0]
     ich = sz[1]
     r = sz[2]
@@ -328,8 +352,11 @@ S(f'// CuNNy {version.replace("-", " ")}')
 S(f'// Copyright (c) 2024 cunnyplapper')
 S(lgpl, end='')
 S('/* ------------------------------------------------------------------- */\n')
-S(easu)
-fsrtex = 'easu'
+
+fsrtex = 'LUMA'
+if usefsr:
+    fsrtex = 'easu'
+    S(easu)
 
 if 'RCAS' in stem:
     fsrtex = 'rcas'
@@ -337,6 +364,7 @@ if 'RCAS' in stem:
 
 texs = ['LUMA']
 nconv = 1
+relu = 'max(r, 0.0)' if not crelu else 'r'
 for k_ in m:
     suf = 'weight'
     if not k_.endswith(suf):
@@ -347,14 +375,15 @@ for k_ in m:
     if k.startswith(pref):
         k = k[len(pref):-1]
     if k.startswith('up'):
-        texs = write('up', k_, 'max(r, 0.0)', texs)
+        texs = write('up', k_, relu, texs)
     elif k.startswith('conv'):
-        texs = write(f'conv{nconv}', k_, 'max(r, 0.0)', texs)
+        texs = write(f'conv{nconv}', k_, relu, texs)
         nconv += 1
     elif k.startswith('down'):
         texs = write('down', k_, 'tanh(r)', texs)
 
 prelude('shuffle', [*texs, fsrtex], ch=1, upscale=2)
+S(f'\tvec4 r = vec4(0.0);')
 S(f'\tvec2 f = fract(down_pos * down_size);')
 S(f'\tivec2 i = ivec2(f * vec2(2.0));')
 S(f'\tr.r = down_tex((vec2(0.5) - f) * down_pt + down_pos)[2*i.y + i.x];')
