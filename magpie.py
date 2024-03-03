@@ -28,7 +28,7 @@ def S(txt, end='\n'):
     shader += txt + end
 
 def fmt(v):
-    return f'{v:.10f}'
+    return f'{v:.3e}' # enough for fp16
 
 def weight(ws, x, y, ich, och, r, iidx, oidx):
     s = f'\tr += '
