@@ -1,16 +1,20 @@
 # converts the CuNNy model to an mpv usershader
-import torch
+import numpy as np
 import sys
+import pickle
 from pathlib import Path
 
-m = torch.load(sys.argv[1], map_location='cpu')
+with open(sys.argv[1], 'rb') as f:
+    m = pickle.load(f)
+
 shader = ''
 N = sum(1 for x in m.keys() if 'conv' in x and 'weight' in x)
-D = next(m[x] for x in m if 'up' in x and 'weight' in x).size(dim=0)
+D = next(m[x] for x in m if 'in' in x and 'weight' in x).shape[0]
 stem = Path(sys.argv[1]).stem
 version = stem[:stem.rfind('-')]
 usercas = 'RCAS' in stem
 usefsr = 'BILINEAR' not in stem
+usechroma = 'CHROMA' in stem
 crelu = m['crelu']
 
 # thanks vim
@@ -21,13 +25,15 @@ def S(txt, end='\n'):
     global shader
     shader += txt + end
 
+def fmt(v):
+    return f'{v:.10f}'
+
 def weight(ws, x, y, ich, och, r, iidx, oidx):
     cent = r // 2
     S(f'\tr += ', end='')
     w = [str(v.item()) for v in ws[(4*oidx):(4*(1+oidx)), (4*iidx):(4*(1+iidx)),
-                                   y, x].swapdims(0, 1).flatten()]
-    S(f'{"M4" if len(w) > 4 else "V4"}({", ".join(w)}) * l{iidx}'
-      f'({x - cent}.0, {y - cent}.0);')
+                                   y, x].swapaxes(0, 1).flatten()]
+    S(f'{"M4" if len(w) > 4 else "V4"}({", ".join(w)}) * s{iidx}_{y * r + x};')
 
 def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None):
     S(f'')
@@ -45,28 +51,42 @@ def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None):
     S(f'#ifdef GL_EXT_shader_explicit_arithmetic_types_float16')
     S(f'\t#define V4 f16vec4')
     S(f'\t#define M4 f16mat4')
+    S(f'\t#define F float16_t')
     S(f'#else')
-    S(f'\t#define V4 f16vec4')
-    S(f'\t#define M4 f16mat4')
+    S(f'\t#define V4 vec4')
+    S(f'\t#define M4 mat4')
+    S(f'\t#define F float')
     S(f'#endif')
     if loadfn:
         for i, inv in enumerate(ins):
-            elm = '.r' if inv == 'LUMA' else ''
             idx = 2 * i if crelu else i
             v = f'{inv}_texOff(vec2(x, y))'
-            if crelu:
-                S(f'#define l{idx}(x, y) V4(max({v}, 0.0){elm})')
-                S(f'#define l{idx + 1}(x, y) V4(max(-{v}, 0.0){elm})')
+            if inv == 'LUMA':
+                S(f'#define l{idx}(x, y) F({v}.r)')
             else:
-                S(f'#define l{idx}(x, y) V4({v}{elm})')
+                S(f'#define l{idx}(x, y) V4({v})')
     S(f'vec4 hook() {openbr}')
     if save:
         S(f'\tV4 r = V4(0.0);')
 
 def out(ps, k, actfn, ins, ws, ich, och, r, oidx):
-    ps = f'{ps}' + (f':{oidx}' if ps != 'down' else '')
+    ps = f'{ps}' + (f':{oidx}' if ps != 'out' else '')
     tex = ps.replace(':', '_')
     prelude(ps, ins, loadfn=True, save=tex)
+    stype = 'F' if ins == ['LUMA'] else 'V4'
+    cent = r // 2
+    for iidx in range(0, max(ich // 4, 1), 2 if crelu else 1):
+        for y in range(r):
+            for x in range(r):
+                idx = y * r + x
+                S(f'\t{stype} s{iidx}_{idx} = '
+                  f'l{iidx // (2 if crelu else 1)}({x - cent}.0, {y - cent}.0);')
+        if crelu:
+            for y in range(r):
+                for x in range(r):
+                    idx = y * r + x
+                    S(f'\t{stype} s{iidx + 1}_{idx} = max(-s{iidx}_{idx}, {stype}(0.0));')
+                    S(f'\ts{iidx}_{idx} = max(s{iidx}_{idx}, {stype}(0.0));')
     for iidx in range(max(ich // 4, 1)):
         for y in range(r):
             for x in range(r):
@@ -75,18 +95,18 @@ def out(ps, k, actfn, ins, ws, ich, och, r, oidx):
     if bn in m:
         b = [str(v.item()) for v in m[bn][4*oidx:4*(oidx+1)]]
         S(f'\tr += V4({", ".join(b)});')
-    S(f'\treturn vec4({actfn});')
+    S(f'\treturn vec4({actfn.replace("X", "r")});')
     S(f'{closebr}\n')
     return tex
 
 def write(ps, k, actfn, ins):
     ws = m[k+'weight']
-    sz = ws.size()
+    sz = ws.shape
     crelup = crelu and ins != ['LUMA']
     if crelup:
-        ws = ws.view(sz[0], -1, 4, sz[2], sz[3])
+        ws = ws.reshape(sz[0], -1, 4, sz[2], sz[3])
         half = ws.shape[1] // 2
-        ws = torch.dstack((ws[:, :half], ws[:, half:])).view(sz)
+        ws = np.dstack((ws[:, :half], ws[:, half:])).reshape(sz)
     och = sz[0]
     ich = sz[1]
     r = sz[2]
@@ -364,7 +384,7 @@ if 'RCAS' in stem:
 
 texs = ['LUMA']
 nconv = 1
-relu = 'max(r, 0.0)' if not crelu else 'r'
+relu = 'max(X, 0.0)' if not crelu else 'X'
 for k_ in m:
     suf = 'weight'
     if not k_.endswith(suf):
@@ -374,19 +394,19 @@ for k_ in m:
     pref = '_orig_mod.'
     if k.startswith(pref):
         k = k[len(pref):-1]
-    if k.startswith('up'):
-        texs = write('up', k_, relu, texs)
+    if k.startswith('cin'):
+        texs = write('in', k_, relu, texs)
     elif k.startswith('conv'):
         texs = write(f'conv{nconv}', k_, relu, texs)
         nconv += 1
-    elif k.startswith('down'):
-        texs = write('down', k_, 'tanh(r)', texs)
+    elif k.startswith('cout'):
+        texs = write('out', k_, 'tanh(X)', texs)
 
 prelude('shuffle', [*texs, fsrtex], ch=1, upscale=2)
 S(f'\tvec4 r = vec4(0.0);')
-S(f'\tvec2 f = fract(down_pos * down_size);')
+S(f'\tvec2 f = fract(out_pos * out_size);')
 S(f'\tivec2 i = ivec2(f * vec2(2.0));')
-S(f'\tr.r = down_tex((vec2(0.5) - f) * down_pt + down_pos)[2*i.y + i.x];')
+S(f'\tr.r = out_tex((vec2(0.5) - f) * out_pt + out_pos)[2*i.y + i.x];')
 S(f'\tr.r += {fsrtex}_tex({fsrtex}_pos).r;')
 S(f'\tr.a = 1.0;')
 S(f'\treturn clamp(r, 0.0, 1.0);')

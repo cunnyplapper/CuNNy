@@ -7,18 +7,15 @@ import argparse
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.utils
+import itertools
+import time
+import pickle
+from torch.utils.tensorboard import SummaryWriter
+from collections import OrderedDict
+from multiprocessing import Pool
 from torchvision import transforms
 from torcheval.metrics.functional import peak_signal_noise_ratio as psnr
 from PIL import Image
-
-hascuda = torch.cuda.is_available()
-dev = torch.device('cuda' if hascuda else 'cpu')
-if hascuda:
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
-    torch.backends.cudnn.allow_tf32 = True
-    torch.backends.cudnn.benchmark = True
 
 # epochs
 E = 500
@@ -26,8 +23,22 @@ E = 500
 B = 64
 # learning rate
 LR = 0.0001
-# max learning rate (with OneCycleLR)
+# max learning rate with OneCycleLR
 MAX_LR = 0.001
+# weight decay
+W = 0.001
+
+def split(l, v):
+    return [list(g) for k, g in itertools.groupby(l, lambda x: x != v) if k]
+
+argvs = split(sys.argv[1:], '++')
+gargv, argv = argvs if len(argvs) == 2 else ([], *argvs)
+
+parser = argparse.ArgumentParser()
+parser.add_argument('-C', '--chroma', action='store_true')
+gargs = parser.parse_args(gargv)
+
+CHROMA = gargs.chroma
 
 parser = argparse.ArgumentParser()
 parser.add_argument('N', type=int)
@@ -37,149 +48,211 @@ parser.add_argument('-e', '--epochs', type=int, default=E)
 parser.add_argument('-b', '--batch', type=int, default=B)
 parser.add_argument('-l', '--lr', type=float, default=LR)
 parser.add_argument('-L', '--max-lr', type=float, default=MAX_LR)
-parser.add_argument('-c', '--crelu', type=bool, default=False)
-args = parser.parse_args()
+parser.add_argument('-w', '--weight-decay', type=float, default=W)
+parser.add_argument('-c', '--crelu', action='store_true')
+parser.add_argument('-2', '--l2', action='store_true')
+allargs = [parser.parse_args(args) for args in split(argv, '+')]
 
-# internal convolutions
-N  = args.N
-# feature layers/depth
-D = args.D
-E = args.epochs
-B = args.batch
-LR = args.lr
-MAX_LR = args.max_lr
-CRELU = args.crelu
+hascuda = torch.cuda.is_available()
+torch.multiprocessing.set_sharing_strategy('file_system')
+dev = torch.device('cuda' if hascuda else 'cpu')
+if hascuda:
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
 
-def act(x):
-    if CRELU:
-        return torch.cat((F.relu(x), F.relu(-x)), dim=1)
-    else:
-        return F.relu(x)
-
-class Net(nn.Module):
-    def __init__(self):
-        super(Net, self).__init__()
-        M = 2 if CRELU else 1
-        self.up = nn.Conv2d(1, D, 3, padding='same')
-        self.conv = nn.ModuleList()
-        for i in range(N):
-            c = nn.Conv2d(M * D, D, 3, padding='same')
-            if CRELU:
-                nn.init.xavier_normal_(
-                    c.weight, gain=nn.init.calculate_gain('linear'))
-            else:
-                nn.init.kaiming_normal_(
-                    c.weight, mode='fan_out', nonlinearity='relu')
-            nn.init.zeros_(c.bias)
-            self.conv.append(c)
-        self.down = nn.Conv2d(M * D, 4, 3, padding='same')
-        if CRELU:
-            nn.init.xavier_normal_(
-               self.up.weight, gain=nn.init.calculate_gain('linear'))
-        else:
-            nn.init.kaiming_normal_(
-               self.up.weight, mode='fan_out', nonlinearity='relu')
-        nn.init.xavier_normal_(
-           self.down.weight, gain=nn.init.calculate_gain('tanh'))
-        nn.init.zeros_(self.up.bias)
-        nn.init.zeros_(self.down.bias)
-
-    def forward(self, x, y):
-        x = act(self.up(x))
-        for conv in self.conv:
-            x = act(conv(x))
-        x = F.tanh(self.down(x))
-        x = F.pixel_shuffle(x, 2)
-        x = torch.add(x, y)
-        return torch.clamp(x, 0., 1.)
-
-def load(dir, file, transform):
+def load(dir, file, variants):
     fn = os.path.join(dir, file)
     if not os.path.exists(fn):
         fn = fn.replace('png', 'jpg')
-    return transform(Image.open(fn).convert('L')).to(dev)
+    out = []
+    with Image.open(fn) as img:
+        for v in variants:
+            out += [img.convert(v)]
+    return out
+
+def loadall(pool, dir, files, transform, variants):
+    vs = ((dir, file, variants) for file in files)
+    return [list(map(lambda x: transform(x).to(dev), imgs))
+            for imgs in list(pool.starmap(load, vs))]
 
 class Dataset(torch.utils.data.Dataset):
-    def __init__(self, dirx, diry, dirtrue, transform):
+    def __init__(self, dirx, dirz, dirtrue, transform):
         self.files = os.listdir(dirtrue)
-        self.x = [load(dirx, file, transform) for file in self.files]
-        if diry:
-            self.y = [load(diry, file, transform) for file in self.files]
-        else:
-            self.y = [F.interpolate(x.unsqueeze(dim=0), scale_factor=2, mode='bilinear',
-                                    align_corners=False).squeeze(dim=0) for x in self.x]
-        self.true = [load(dirtrue, file, transform) for file in self.files]
+        with Pool() as pool:
+            if CHROMA:
+                xrgb, xl = zip(*loadall(
+                    pool, dirx, self.files, transform, ['RGB', 'L']))
+            else:
+                xrgb = [x[0] for x in loadall(
+                    pool, dirx, self.files, transform, ['L'])]
+                xl = xrgb
+            self.x = xrgb
+            self.y = [F.interpolate(
+                x.unsqueeze(dim=0), scale_factor=2, mode='bilinear',
+                align_corners=False).squeeze(dim=0) for x in xl]
+            self.z = [x[0] for x in loadall(
+                pool, dirz, self.files, transform, ['L'])] if dirz else None
+            self.true = [x[0] for x in loadall(
+                pool, dirtrue, self.files, transform, ['L'])]
 
     def __len__(self):
         return len(self.files)
 
     def __getitem__(self, idx):
-        return self.x[idx], self.y[idx], self.true[idx], self.files[idx]
+        return self.x[idx], self.y[idx], self.z[idx] if self.z else \
+               torch.empty(0), self.true[idx], self.files[idx]
 
-transform = transforms.Compose([transforms.ToTensor()])
-fsr = 'in/easu'
+FSR = 'in/easu'
 rcas = False
-if not os.path.isdir(fsr):
-    folder = next((f for f in os.listdir('in') if f.startswith('rcas-')), None)
+if not os.path.isdir(FSR):
+    folder = next(
+        (f for f in os.listdir('in') if f.startswith('rcas-')), None)
     if folder:
-        fsr = 'in/' + next(f for f in os.listdir('in') if 'rcas-' in f)
+        FSR = 'in/' + next(f for f in os.listdir('in') if 'rcas-' in f)
         rcas = True
     else:
-        fsr = None
-dataset = Dataset('in/64', fsr, 'in/128', transform)
+        FSR = None
+
+transform = transforms.Compose([transforms.ToTensor()])
+dataset = Dataset('in/64', FSR, 'in/128', transform)
 dataloader = torch.utils.data.DataLoader(dataset, batch_size=B, shuffle=True)
 
-model = Net().to(dev)
-loss_fn = nn.L1Loss()
-opt = torch.optim.AdamW(model.parameters(), lr=LR)
-sched = torch.optim.lr_scheduler.OneCycleLR(
-    opt, max_lr=MAX_LR, steps_per_epoch=len(dataloader), epochs=E)
+for args in allargs:
+    t0 = time.time()
 
-idx = 0
-nloss = 0
-runloss = 0.
+    # internal convolutions
+    N  = args.N
+    # feature layers/depth
+    D = args.D
+    E = args.epochs
+    B = args.batch
+    LR = args.lr
+    MAX_LR = args.max_lr
+    CRELU = args.crelu
+    W = args.weight_decay
 
-@torch.compile(mode='max-autotune')
-def fwd(x, y, true):
-    pred = model(x, y)
-    loss = loss_fn(pred, true)
-    loss.backward()
-    return pred, loss
+    def act(x):
+        if CRELU:
+            return torch.cat((F.relu(x), F.relu(-x)), dim=1)
+        else:
+            return F.relu(x)
 
-def train():
-    global idx, runloss, nloss
-    for i, (x, y, true, files) in enumerate(dataloader):
-        opt.zero_grad(True)
-        pred, loss = fwd(x, y, true)
-        opt.step()
-        sched.step()
-        runloss += loss
-        nloss += 1
-    with torch.no_grad():
-        psnrv = psnr(pred, true)
-        print(f'[{idx + 1}/{E}] L: {(runloss / nloss):.5f} '
-              f'| psnr: {psnrv:.3f} ')
+    class Net(nn.Module):
+        def __init__(self):
+            super(Net, self).__init__()
+            M = 2 if CRELU else 1
+            if CHROMA:
+                self.fancyluma = nn.Conv2d(3, 1, 1, padding='same')
+            self.cin = nn.Conv2d(1, D, 3, padding='same')
+            self.conv = nn.ModuleList()
+            for i in range(N):
+                c = nn.Conv2d(M * D, D, 3, padding='same')
+                if CRELU:
+                    nn.init.xavier_normal_(
+                        c.weight, gain=nn.init.calculate_gain('linear'))
+                else:
+                    nn.init.kaiming_normal_(
+                        c.weight, mode='fan_out', nonlinearity='relu')
+                nn.init.zeros_(c.bias)
+                self.conv.append(c)
+            self.cout = nn.Conv2d(M * D, 4, 3, padding='same')
+            if CRELU:
+                nn.init.xavier_normal_(
+                   self.cin.weight, gain=nn.init.calculate_gain('linear'))
+            else:
+                nn.init.kaiming_normal_(
+                   self.cin.weight, mode='fan_out', nonlinearity='relu')
+            nn.init.xavier_normal_(
+               self.cout.weight, gain=nn.init.calculate_gain('tanh'))
+            nn.init.zeros_(self.cin.bias)
+            nn.init.zeros_(self.cout.bias)
+
+        def forward(self, x, y, z):
+            if CHROMA:
+                x = self.fancyluma(x)
+            x = act(self.cin(x))
+            for conv in self.conv:
+                x = act(conv(x))
+            x = F.tanh(self.cout(x))
+            x = F.pixel_shuffle(x, 2)
+            if FSR:
+                x = torch.add(x, z)
+            else:
+                x = torch.add(x, y)
+            return torch.clamp(x, 0., 1.)
+
+    model = Net().to(dev)
+    loss_fn = nn.MSELoss() if args.l2 else nn.L1Loss()
+    opt = torch.optim.AdamW(model.parameters(), lr=LR,
+                           weight_decay=args.weight_decay)
+    sched = torch.optim.lr_scheduler.OneCycleLR(
+        opt, max_lr=MAX_LR, steps_per_epoch=len(dataloader), epochs=E)
+
+    epoch = 0
     nloss = 0
     runloss = 0.
-    idx += 1
 
-with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-    for i in range(E):
-        train()
+    @torch.compile(mode='max-autotune')
+    def fwd(x, y, z, true):
+        pred = model(x, y, z)
+        loss = loss_fn(pred, true)
+        loss.backward()
+        return pred, loss
 
-i = 0
-fn = ''
-suf = (('RCAS-' if rcas else 'BILINEAR-' if fsr is None else '')
-    + (args.suffix + '-' if args.suffix else ''))
-version = f'{N}x{D}{"C" if CRELU else ""}-{suf}'
-while os.path.exists((fn := f'models/{version}{i}.pt')):
-    i += 1
-sd = model.state_dict()
-if rcas:
-    sd['sharpness'] = float(fsr.replace('in/rcas-', ''))
-sd['crelu'] = CRELU
+    fn = ''
+    suf = (
+        ('RCAS-' if rcas else 'BILINEAR-' if FSR is None else '') +
+        ('CHROMA-' if CHROMA else '') +
+        (args.suffix + '-' if args.suffix else '')
+    )
+    version = f'{N}x{D}{"C" if CRELU else ""}-{suf}'
 
-torch.save(sd, fn)
-print(f'saved to {fn}')
-with open('test/last.txt', 'w') as f:
-    f.write(fn)
+    i = 0
+    while os.path.exists((fn := f'models/{version}{i}.pickle')):
+        i += 1
+
+    writer = SummaryWriter(fn.replace('models/', 'runs/'))
+
+    def train():
+        global epoch, runloss, nloss
+        for i, (x, y, z, true, files) in enumerate(dataloader):
+            opt.zero_grad(True)
+            pred, loss = fwd(x, y, z, true)
+            opt.step()
+            sched.step()
+            runloss += loss
+            nloss += 1
+        with torch.no_grad():
+            avgl = runloss / nloss
+            psnrv = psnr(pred, true)
+            writer.add_scalar('L', avgl, epoch + 1)
+            writer.add_scalar('PSNR', psnrv, epoch + 1)
+            print(f'[{epoch + 1}/{E}] L: {avgl:.5f} '
+                  f'| psnr: {psnrv:.3f}')
+        nloss = 0
+        runloss = 0.
+        epoch += 1
+
+    print(f'training {version[:-1]}')
+    with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+        for i in range(E):
+            train()
+    writer.flush()
+
+    sd = OrderedDict()
+    for k, v in model.state_dict().items():
+        sd[k] = v.cpu().numpy() if hasattr(v, 'numpy') else v
+    if rcas:
+        sd['sharpness'] = float(FSR.replace('in/rcas-', ''))
+    sd['crelu'] = CRELU
+
+    with open(fn, 'wb') as f:
+        pickle.dump(sd, f, protocol=pickle.HIGHEST_PROTOCOL)
+    print(f'saved to {fn}')
+    with open('test/last.txt', 'w') as f:
+        f.write(fn)
+
+    t = int(time.time() - t0)
+    print(f'took {t // 60}m {t % 60}s')

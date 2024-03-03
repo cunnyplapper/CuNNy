@@ -1,13 +1,18 @@
 # converts the CuNNy model to an MagpieFX effect
 # this code sucks, maybe tidy up one day™..
-import torch
 import sys
+import numpy as np
+import pickle
+from collections import OrderedDict
 from pathlib import Path
 
-m = torch.load(sys.argv[1], map_location='cpu')
+with open(sys.argv[1].replace('.pt', '.pickle'), 'rb') as f:
+    m = pickle.load(f)
+
 shader = ''
 N = sum(1 for x in m.keys() if 'conv' in x and 'weight' in x)
-D = next(m[x] for x in m if 'up' in x and 'weight' in x).size(dim=0)
+D = next(m[x] for x in m if 'cin' in x and 'weight' in x).shape[0]
+CHROMA = 'fancyluma.weight' in m
 stem = Path(sys.argv[1]).stem
 version = stem[:stem.rfind('-')]
 usercas = 'RCAS' in stem
@@ -22,10 +27,13 @@ def S(txt, end='\n'):
     global shader
     shader += txt + end
 
+def fmt(v):
+    return f'{v:.10f}'
+
 def weight(ws, x, y, ich, och, r, iidx, oidx):
     s = f'\tr += '
-    w = [str(v.item()) for v in ws[(4*oidx):(4*(1+oidx)), (4*iidx):(4*(1+iidx)),
-                                   y, x].swapdims(0, 1).flatten()]
+    w = [fmt(v.item()) for v in ws[(4*oidx):(4*(1+oidx)), (4*iidx):(4*(1+iidx)),
+                                   y, x].swapaxes(0, 1).flatten()]
     wflat = ", ".join(w)
     l = f's{iidx}_{y * r + x}'
     if len(w) > 4:
@@ -53,9 +61,34 @@ SamplerState SL;
 
 """
 
+imgs = {}
+def allocimgs(ins, n):
+    global header, imgs
+    out = []
+    for name, ref in imgs.items():
+        if len(out) == n:
+            break
+        if ref == 0:
+            out += [name]
+            imgs[name] += 1
+    for i in range(len(out), n):
+        name = f't{len(imgs)}'
+        header += f'//!TEXTURE\n'
+        header += f'//!WIDTH INPUT_WIDTH\n'
+        header += f'//!HEIGHT INPUT_HEIGHT\n'
+        header += f'//!FORMAT R8G8B8A8_SNORM\n'
+        header += f'Texture2D {name};\n'
+        header += f'\n'
+        imgs[name] = 1
+        out += [name]
+    for inv in ins:
+        if inv in imgs:
+            imgs[inv] -= 1
+    return out
+
 npass = (2 if usercas else 1) if usefsr else 0
-def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None,
-            multiout=False, signed=False):
+def prelude(ps, ins, loadfn=False, save=None, upscale=None, multiout=False,
+            signed=False):
     global header, npass
     npass += 1
     S(f'//!PASS {npass}')
@@ -67,40 +100,39 @@ def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None,
         S(f'//!NUM_THREADS 64')
     S(f'//!IN ' + ', '.join(ins))
     if save:
+        save = allocimgs(ins, len(save))
         S(f'//!OUT {", ".join(save) if save else "OUTPUT"}')
         S('#define O(t, p) t.SampleLevel(SP, pos + p * pt, 0)')
-    c4fmt = 'R8G8B8A8_SNORM' if signed or crelu else 'R8G8B8A8_UNORM'
-    for tex in save if save else []:
-        header += f'//!TEXTURE\n'
-        header += f'//!WIDTH INPUT_WIDTH\n'
-        header += f'//!HEIGHT INPUT_HEIGHT\n'
-        header += f'//!FORMAT {"R8_UNORM" if ch == 1 else c4fmt}\n'
-        header += f'Texture2D {tex};\n'
-        header += f'\n'
     if loadfn:
         for i, inv in enumerate(ins):
             fn = f'O({inv}, float2(x, y))'
             if inv == 'INPUT':
-                fn = f'dot(float3(0.299, 0.587, 0.114), {fn}.rgb)'
+                if CHROMA:
+                    lw = ', '.join([str(v.item()) for v in m['fancyluma.weight'].flatten()])
+                    lb = str(m['fancyluma.bias'].item())
+                    fn = f'(dot(float3({lw}), {fn}.rgb) + {lb})'
+                else:
+                    fn = f'dot(float3(0.299, 0.587, 0.114), {fn}.rgb)'
             S(f'#define l{i}(x, y) {fn}')
     if upscale:
         S(f'float4 Pass{npass}(float2 pos) {openbr}')
         S(f'\tfloat2 pt = float2(GetInputPt());')
+    return save
 
 def write(ps, k, actfn, ins):
     ws = m[k+'weight']
-    sz = ws.size()
+    sz = ws.shape
     crelup = crelu and ins != ['INPUT']
     if crelup:
-        ws = ws.view(sz[0], -1, 4, sz[2], sz[3])
+        ws = ws.reshape(sz[0], -1, 4, sz[2], sz[3])
         half = ws.shape[1] // 2
-        ws = torch.dstack((ws[:, :half], ws[:, half:])).view(sz)
+        ws = np.dstack((ws[:, :half], ws[:, half:])).reshape(sz)
     och = sz[0]
     ich = sz[1]
     r = sz[2]
-    texs = [f'{ps}' + (f'_{oidx}' if ps != 'down' else '')
-             for oidx in range(och // 4)]
-    prelude(ps, ins, loadfn=True, save=texs, multiout=True, signed=(ps == 'down'))
+    texs = [f'{ps}_{oidx}' for oidx in range(och // 4)]
+    texs = prelude(ps, ins, loadfn=True, save=texs, multiout=True,
+                   signed=(ps == 'out'))
     global shader
     start = len(shader)
     S(f'void Pass{npass}(uint2 blockStart, uint3 tid) {openbr}')
@@ -147,7 +179,7 @@ def write(ps, k, actfn, ins):
         bn = k + 'bias'
         if bn in m:
             b = [str(v.item()) for v in m[bn][4*oidx:4*(oidx+1)]]
-            wfns += f'\tr += float4({", ".join(b)});\n'
+            wfns += f'\tr += min16float4({", ".join(b)});\n'
         wfns += f'\treturn {actfn.replace("X", f"r")};\n'
         wfns += closebr + '\n'
         S(f'\t{texs[oidx]}[gxy] = f{oidx}(pt, pos, {", ".join(vs)});')
@@ -427,13 +459,13 @@ for k_ in m:
     pref = '_orig_mod.'
     if k.startswith(pref):
         k = k[len(pref):-1]
-    if k.startswith('up'):
-        texs = write('up', k_, relu, texs)
+    if k.startswith('cin'):
+        texs = write('in', k_, relu, texs)
     elif k.startswith('conv'):
         texs = write(f'conv{nconv}', k_, relu, texs)
         nconv += 1
-    elif k.startswith('down'):
-        texs = write('down', k_, 'tanh(X)', texs)
+    elif k.startswith('cout'):
+        texs = write('out', k_, 'tanh(X)', texs)
 
 fsrhdrbase = """//!TEXTURE
 //!WIDTH INPUT_WIDTH * 2
@@ -446,7 +478,7 @@ if usercas:
     fsrhdr += '\n' + fsrhdrbase + 'rcas;\n'
 
 shader = header.replace('__FSR__', fsrhdr if usefsr else '') + shader
-prelude('shuffle', [*texs, 'INPUT'] + ([fsrtex] if usefsr else []), ch=1, upscale=2)
+prelude('shuffle', [*texs, 'INPUT'] + ([fsrtex] if usefsr else []), upscale=2)
 S('\tconst static float3x3 rgb2yuv = {0.299, 0.587, 0.114, -0.169, -0.331, 0.5, 0.5, -0.419, -0.081};')
 S('\tconst static float3x3 yuv2rgb = {1, -0.00093, 1.401687, 1, -0.3437, -0.71417, 1, 1.77216, 0.00099};')
 S(f'\tfloat4 r = 0.0;')
@@ -454,7 +486,7 @@ S(f'\tfloat2 size = float2(GetInputSize());')
 S(f'\tfloat2 f = frac(pos * size);')
 S(f'\tfloat3 yuv = mul(rgb2yuv, INPUT.SampleLevel(SL, pos, 0).rgb);')
 S(f'\tint2 i = int2(f * 2.0);')
-S(f'\tr.r = down.SampleLevel(SP, (float2(0.5, 0.5) - f) * pt + pos, 0)[2*i.y + i.x];')
+S(f'\tr.r = {texs[0]}.SampleLevel(SP, (float2(0.5, 0.5) - f) * pt + pos, 0)[2*i.y + i.x];')
 if usefsr:
     S(f'\tr.r += {fsrtex}.SampleLevel(SP, pos, 0).r;')
 else:
