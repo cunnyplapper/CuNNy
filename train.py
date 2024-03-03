@@ -134,10 +134,21 @@ for args in allargs:
     W = args.weight_decay
 
     def act(x):
-        if CRELU:
-            return torch.cat((F.relu(x), F.relu(-x)), dim=1)
+        if CHROMA: # TODO: stop using chroma an an alias for magpie
+            # on magpie, you can increase performance by using lower precision
+            # texture format like RGBA8_SNORM. however as the name implies, it
+            # requires every value to be in [-1, 1]. larger models seem to
+            # produce layers outside that range, so right now use a leaky clamp
+            # between 0 and 1. this does not hinder model quality.
+            # on mpv you can't change the format anyway so no point
+            a = 0.01
+            relu = lambda x: torch.clamp(x, 0., 1.0) + a * F.relu(x - 1.0)
         else:
-            return F.relu(x)
+            relu = F.relu
+        if CRELU:
+            return torch.cat((relu(x), relu(-x)), dim=1)
+        else:
+            return relu(x)
 
     class Net(nn.Module):
         def __init__(self):

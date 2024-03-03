@@ -6,7 +6,7 @@ import pickle
 from collections import OrderedDict
 from pathlib import Path
 
-with open(sys.argv[1].replace('.pt', '.pickle'), 'rb') as f:
+with open(sys.argv[1], 'rb') as f:
     m = pickle.load(f)
 
 shader = ''
