@@ -37,9 +37,9 @@ def weight(ws, x, y, ich, och, r, iidx, oidx):
     wflat = ", ".join(w)
     l = f's{iidx}_{y * r + x}'
     if len(w) > 4:
-        s += f'mul({l}, min16float4x4({wflat}));\n'
+        s += f'mul({l}, M4({wflat}));\n'
     else:
-        s += f'min16float4({wflat}) * {l};\n'
+        s += f'V4({wflat}) * {l};\n'
     return s
 
 header = """//!MAGPIE EFFECT
@@ -103,6 +103,8 @@ def prelude(ps, ins, loadfn=False, save=None, upscale=None, multiout=False,
         save = allocimgs(ins, len(save))
         S(f'//!OUT {", ".join(save) if save else "OUTPUT"}')
         S('#define O(t, p) t.SampleLevel(SP, pos + p * pt, 0)')
+        S('#define V4 min16float4')
+        S('#define M4 min16float4x4')
     if loadfn:
         for i, inv in enumerate(ins):
             fn = f'O({inv}, float2(x, y))'
@@ -144,7 +146,7 @@ def write(ps, k, actfn, ins):
     S('\t}')
     S('\tfloat2 pos = (gxy + 0.5) * pt;')
     cent = r // 2
-    stype = 'min16float4' if not ins == ['INPUT'] else 'min16float'
+    stype = 'V4' if not ins == ['INPUT'] else 'min16float'
     vs = []
     for iidx in range(0, max(ich // 4, 1), 2 if crelup else 1):
         i = 0
@@ -171,15 +173,15 @@ def write(ps, k, actfn, ins):
     wfns = ''
     for oidx in range(och // 4):
         wfns += f'float4 f{oidx}(float2 pt, float2 pos, {", ".join(f"{stype} {v}" for v in vs)}) {openbr}\n'
-        wfns += f'\tmin16float4 r = 0.0;\n'
+        wfns += f'\tV4 r = 0.0;\n'
         for iidx in range(max(ich // 4, 1)):
             for y in range(r):
                 for x in range(r):
                     wfns += weight(ws, x, y, ich, och, r, iidx, oidx)
         bn = k + 'bias'
         if bn in m:
-            b = [str(v.item()) for v in m[bn][4*oidx:4*(oidx+1)]]
-            wfns += f'\tr += min16float4({", ".join(b)});\n'
+            b = [fmt(v.item()) for v in m[bn][4*oidx:4*(oidx+1)]]
+            wfns += f'\tr += V4({", ".join(b)});\n'
         wfns += f'\treturn {actfn.replace("X", f"r")};\n'
         wfns += closebr + '\n'
         S(f'\t{texs[oidx]}[gxy] = f{oidx}(pt, pos, {", ".join(vs)});')

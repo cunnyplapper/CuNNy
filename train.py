@@ -1,6 +1,6 @@
 # CuNNy corrector/trainer
 # Copyright (c) 2024 cunnyplapper
-# SPDX-License-Identifier: LGPL-3.0-only
+# SPDX-License-Identifier: 	LGPL-3.0-or-later
 import os
 import sys
 import argparse
@@ -201,17 +201,6 @@ for args in allargs:
     sched = torch.optim.lr_scheduler.OneCycleLR(
         opt, max_lr=MAX_LR, steps_per_epoch=len(dataloader), epochs=E)
 
-    epoch = 0
-    nloss = 0
-    runloss = 0.
-
-    @torch.compile(mode='max-autotune')
-    def fwd(x, y, z, true):
-        pred = model(x, y, z)
-        loss = loss_fn(pred, true)
-        loss.backward()
-        return pred, loss
-
     fn = ''
     suf = (
         ('RCAS-' if rcas else 'BILINEAR-' if FSR is None else '') +
@@ -225,6 +214,16 @@ for args in allargs:
         i += 1
 
     writer = SummaryWriter(fn.replace('models/', 'runs/'))
+    epoch = 0
+    nloss = 0
+    runloss = 0.
+
+    @torch.compile(mode='max-autotune')
+    def fwd(x, y, z, true):
+        pred = model(x, y, z)
+        loss = loss_fn(pred, true)
+        loss.backward()
+        return pred, loss
 
     def train():
         global epoch, runloss, nloss
