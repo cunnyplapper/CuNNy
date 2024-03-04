@@ -238,7 +238,6 @@ for args in allargs:
             avgl = runloss / nloss
             psnrv = psnr(pred, true)
             writer.add_scalar('L', avgl, epoch + 1)
-            writer.add_scalar('PSNR', psnrv, epoch + 1)
             print(f'[{epoch + 1}/{E}] L: {avgl:.5f} '
                   f'| psnr: {psnrv:.3f}')
         nloss = 0

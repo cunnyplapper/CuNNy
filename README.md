@@ -1,7 +1,6 @@
 # CuNNy - Convolutional upscaling Neural Network, yeah!
 
-Nice, small, and fast CNN-based upscaler. Works by refining the output of FSR
-for fast and brilliant images.
+Nice, small, and fast realtime CNN-based upscaler.
 
 Currently very new and immature 😭.
 
@@ -19,11 +18,9 @@ being the fastest and `3x32` being the slowest.
 
 Variants:
 - `RCAS`: Provide slightly sharper results for a very small cost in performance
-  (which becomes negligible the bigger the model).
-- `DS`: Trained on images downsampled with Hermite and compressed to JPEG quality
-  75. It's kinda splodgy, but seems okay on some shows.
-- `NVL`: Trained on VN screenshots/CG. Amazing results. Will probably work great
-   on regular artwork as well.
+   (which becomes negligible the bigger the model).
+- `DS`: Trained to denoise & sharpen images.
+- `NVL`: Trained on VN screenshots/CG. Refines bilinear instead of FSR.
 
 # Training
 
