@@ -110,8 +110,9 @@ def prelude(ps, ins, loadfn=False, save=None, upscale=None, multiout=False,
             fn = f'O({inv}, float2(x, y))'
             if inv == 'INPUT':
                 if CHROMA:
-                    lw = ', '.join([str(v.item()) for v in m['fancyluma.weight'].flatten()])
-                    lb = str(m['fancyluma.bias'].item())
+                    lw = ', '.join([fmt(v.item())
+                                    for v in m['fancyluma.weight'].flatten()])
+                    lb = fmt(m['fancyluma.bias'].item())
                     fn = f'(dot(float3({lw}), {fn}.rgb) + {lb})'
                 else:
                     fn = f'dot(float3(0.299, 0.587, 0.114), {fn}.rgb)'
@@ -481,8 +482,8 @@ if usercas:
 
 shader = header.replace('__FSR__', fsrhdr if usefsr else '') + shader
 prelude('shuffle', [*texs, 'INPUT'] + ([fsrtex] if usefsr else []), upscale=2)
-S('\tconst static float3x3 rgb2yuv = {0.299, 0.587, 0.114, -0.169, -0.331, 0.5, 0.5, -0.419, -0.081};')
-S('\tconst static float3x3 yuv2rgb = {1, -0.00093, 1.401687, 1, -0.3437, -0.71417, 1, 1.77216, 0.00099};')
+S('\tstatic const float3x3 rgb2yuv = {0.299, 0.587, 0.114, -0.169, -0.331, 0.5, 0.5, -0.419, -0.081};')
+S('\tstatic const float3x3 yuv2rgb = {1, -0.00093, 1.401687, 1, -0.3437, -0.71417, 1, 1.77216, 0.00099};')
 S(f'\tfloat4 r = 0.0;')
 S(f'\tfloat2 size = float2(GetInputSize());')
 S(f'\tfloat2 f = frac(pos * size);')

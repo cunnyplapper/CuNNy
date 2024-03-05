@@ -8,8 +8,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import itertools
-import time
 import pickle
+import tqdm
 from torch.utils.tensorboard import SummaryWriter
 from collections import OrderedDict
 from multiprocessing import Pool
@@ -35,6 +35,7 @@ argvs = split(sys.argv[1:], '++')
 gargv, argv = argvs if len(argvs) == 2 else ([], *argvs)
 
 parser = argparse.ArgumentParser()
+parser.add_argument('data', type=str)
 parser.add_argument('-C', '--chroma', action='store_true')
 gargs = parser.parse_args(gargv)
 
@@ -82,13 +83,12 @@ class Dataset(torch.utils.data.Dataset):
         self.files = os.listdir(dirtrue)
         with Pool() as pool:
             if CHROMA:
-                xrgb, xl = zip(*loadall(
+                self.x, xl = zip(*loadall(
                     pool, dirx, self.files, transform, ['RGB', 'L']))
             else:
-                xrgb = [x[0] for x in loadall(
+                self.x = [x[0] for x in loadall(
                     pool, dirx, self.files, transform, ['L'])]
-                xl = xrgb
-            self.x = xrgb
+                xl = self.x
             self.y = [F.interpolate(
                 x.unsqueeze(dim=0), scale_factor=2, mode='bilinear',
                 align_corners=False).squeeze(dim=0) for x in xl]
@@ -104,24 +104,19 @@ class Dataset(torch.utils.data.Dataset):
         return self.x[idx], self.y[idx], self.z[idx] if self.z else \
                torch.empty(0), self.true[idx], self.files[idx]
 
-FSR = 'in/easu'
+FSR = f'{gargs.data}/easu'
 rcas = False
 if not os.path.isdir(FSR):
-    folder = next(
-        (f for f in os.listdir('in') if f.startswith('rcas-')), None)
-    if folder:
-        FSR = 'in/' + next(f for f in os.listdir('in') if 'rcas-' in f)
+    FSR = next(
+        (f for f in os.listdir(f'{gargs.data}') if f.startswith('rcas-')), None)
+    if FSR:
         rcas = True
-    else:
-        FSR = None
 
 transform = transforms.Compose([transforms.ToTensor()])
-dataset = Dataset('in/64', FSR, 'in/128', transform)
+dataset = Dataset(f'{gargs.data}/64', FSR, f'{gargs.data}/128', transform)
 dataloader = torch.utils.data.DataLoader(dataset, batch_size=B, shuffle=True)
 
 for args in allargs:
-    t0 = time.time()
-
     # internal convolutions
     N  = args.N
     # feature layers/depth
@@ -194,8 +189,8 @@ for args in allargs:
             else:
                 x = torch.add(x, y)
             return torch.clamp(x, 0., 1.)
-
-    model = Net().to(dev)
+    
+    model = Net().to(dev, memory_format=torch.channels_last)
     loss_fn = nn.MSELoss() if args.l2 else nn.L1Loss()
     opt = torch.optim.AdamW(model.parameters(), lr=LR,
                            weight_decay=args.weight_decay)
@@ -235,19 +230,25 @@ for args in allargs:
             sched.step()
             runloss += loss
             nloss += 1
+            lasty = y
         with torch.no_grad():
             avgl = runloss / nloss
             psnrv = psnr(pred, true)
+            if epoch % 20 == 0 or epoch == E - 1:
+                writer.add_images(
+                    'pred/true',
+                    torch.stack((lasty[0, 0], pred[0, 0], true[0, 0]))
+                        .unsqueeze(dim=1),
+                    global_step=epoch, dataformats='NCHW')
             writer.add_scalar('L', avgl, epoch + 1)
-            print(f'[{epoch + 1}/{E}] L: {avgl:.5f} '
-                  f'| psnr: {psnrv:.3f}')
+            writer.add_scalar('psnr', psnrv, epoch + 1)
         nloss = 0
         runloss = 0.
         epoch += 1
 
-    print(f'training {version[:-1]}')
+    print(f'training {fn}')
     with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-        for i in range(E):
+        for i in tqdm.trange(E):
             train()
     writer.flush()
 
@@ -255,14 +256,10 @@ for args in allargs:
     for k, v in model.state_dict().items():
         sd[k] = v.cpu().numpy() if hasattr(v, 'numpy') else v
     if rcas:
-        sd['sharpness'] = float(FSR.replace('in/rcas-', ''))
+        sd['sharpness'] = float(FSR.replace(f'{gargs.data}/rcas-', ''))
     sd['crelu'] = CRELU
 
     with open(fn, 'wb') as f:
         pickle.dump(sd, f, protocol=pickle.HIGHEST_PROTOCOL)
-    print(f'saved to {fn}')
     with open('test/last.txt', 'w') as f:
         f.write(fn)
-
-    t = int(time.time() - t0)
-    print(f'took {t // 60}m {t % 60}s')
