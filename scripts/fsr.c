@@ -69,7 +69,6 @@ int main(int argc, char *argv[])
 	f32 scale = 2.0f;
 	char *end;
 	i32 ow = (i32)(w * scale), oh = (i32)(h * scale);
-	fprintf(stderr, "%dx%d -> %dx%d\n", w, h, ow, oh);
 	ENSURE(gladLoaderLoadVulkan(NULL, NULL, NULL) != 0);
 	VkApplicationInfo ai = {
 		.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -456,9 +455,7 @@ int main(int argc, char *argv[])
 	VKENSURE(vkQueueWaitIdle(queue));
 	u8 *tmp = malloc(bufsz);
 	memcpy(tmp, bufp, bufsz);
-	fprintf(stderr, "done vk\n");
 	stbi_write_png_compression_level = 0;
 	stbi_write_png(argv[2], ow, oh, 1, tmp, ow);
-	fprintf(stderr, "ok\n");
 	return 0;
 }
