@@ -193,7 +193,7 @@ for args in allargs:
     model = Net().to(dev, memory_format=torch.channels_last)
     loss_fn = nn.MSELoss() if args.l2 else nn.L1Loss()
     opt = torch.optim.AdamW(model.parameters(), lr=LR,
-                           weight_decay=args.weight_decay)
+                            weight_decay=args.weight_decay)
     sched = torch.optim.lr_scheduler.OneCycleLR(
         opt, max_lr=MAX_LR, steps_per_epoch=len(dataloader), epochs=E)
 
@@ -209,13 +209,14 @@ for args in allargs:
     while os.path.exists((fn := f'models/{version}{i}.pickle')):
         i += 1
 
-    writer = SummaryWriter(fn.replace('models/', 'runs/'))
+    writer = SummaryWriter(fn.replace('models/', 'runs/'), flush_secs=1)
     epoch = 0
     nloss = 0
     runloss = 0.
 
     @torch.compile(mode='max-autotune')
     def fwd(x, y, z, true):
+        opt.zero_grad(True)
         pred = model(x, y, z)
         loss = loss_fn(pred, true)
         loss.backward()
@@ -224,32 +225,35 @@ for args in allargs:
     def train():
         global epoch, runloss, nloss
         for i, (x, y, z, true, files) in enumerate(dataloader):
-            opt.zero_grad(True)
             pred, loss = fwd(x, y, z, true)
             opt.step()
             sched.step()
             runloss += loss
             nloss += 1
             lasty = y
+            lastz = z
         with torch.no_grad():
             avgl = runloss / nloss
             psnrv = psnr(pred, true)
             if epoch % 20 == 0 or epoch == E - 1:
+                imgs = (lasty, lastz, pred, true)
                 writer.add_images(
                     'pred/true',
-                    torch.stack((lasty[0, 0], pred[0, 0], true[0, 0]))
-                        .unsqueeze(dim=1),
+                    torch.stack(tuple(x[0, 0] for x in imgs if len(x[0]) > 0))
+                         .unsqueeze(dim=1),
                     global_step=epoch, dataformats='NCHW')
             writer.add_scalar('L', avgl, epoch + 1)
             writer.add_scalar('psnr', psnrv, epoch + 1)
         nloss = 0
         runloss = 0.
         epoch += 1
+        return avgl
 
     print(f'training {fn}')
     with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-        for i in tqdm.trange(E):
-            train()
+        for i in (t := tqdm.trange(E)):
+            loss = train()
+            t.set_description(f'L: {loss:.5f}')
     writer.flush()
 
     sd = OrderedDict()
