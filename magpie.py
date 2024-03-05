@@ -162,7 +162,7 @@ def write(ps, k, actfn, ins):
         for y in range(r):
             for x in range(r):
                 v = f's{iidx + 1}_{i}'
-                S(f'\t{stype} {v} = max(-s{iidx}_{i}, 0.0);')
+                S(f'\t{stype} {v} = -max(-s{iidx}_{i}, 0.0);')
                 vs += [v]
                 i += 1
         i = 0

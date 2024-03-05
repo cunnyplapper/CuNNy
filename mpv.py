@@ -85,7 +85,7 @@ def out(ps, k, actfn, ins, ws, ich, och, r, oidx):
             for y in range(r):
                 for x in range(r):
                     idx = y * r + x
-                    S(f'\t{stype} s{iidx + 1}_{idx} = max(-s{iidx}_{idx}, {stype}(0.0));')
+                    S(f'\t{stype} s{iidx + 1}_{idx} = -max(-s{iidx}_{idx}, {stype}(0.0));')
                     S(f'\ts{iidx}_{idx} = max(s{iidx}_{idx}, {stype}(0.0));')
     for iidx in range(max(ich // 4, 1)):
         for y in range(r):

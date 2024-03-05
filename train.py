@@ -146,7 +146,8 @@ for args in allargs:
         else:
             relu = F.relu
         if CRELU:
-            return torch.cat((relu(x), relu(-x)), dim=1)
+            # negated seems to train smoother
+            return torch.cat((relu(x), -relu(-x)), dim=1)
         else:
             return relu(x)
 
