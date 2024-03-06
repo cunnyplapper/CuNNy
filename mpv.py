@@ -28,12 +28,12 @@ def S(txt, end='\n'):
 def fmt(v):
     return f'{v:.10f}'
 
-def weight(ws, x, y, ich, och, r, iidx, oidx):
-    cent = r // 2
+def weight(ws, x, y, ich, och, d, iidx, oidx):
+    cent = d // 2
     S(f'\tr += ', end='')
     w = [str(v.item()) for v in ws[(4*oidx):(4*(1+oidx)), (4*iidx):(4*(1+iidx)),
                                    y, x].swapaxes(0, 1).flatten()]
-    S(f'{"M4" if len(w) > 4 else "V4"}({", ".join(w)}) * s{iidx}_{y * r + x};')
+    S(f'{"M4" if len(w) > 4 else "V4"}({", ".join(w)}) * s{iidx}_{y * d + x};')
 
 def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None):
     S(f'')
@@ -69,28 +69,28 @@ def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None):
     if save:
         S(f'\tV4 r = V4(0.0);')
 
-def out(ps, k, actfn, ins, ws, ich, och, r, oidx):
+def out(ps, k, actfn, ins, ws, ich, och, d, oidx):
     ps = f'{ps}' + (f':{oidx}' if ps != 'out' else '')
     tex = ps.replace(':', '_')
     prelude(ps, ins, loadfn=True, save=tex)
     stype = 'F' if ins == ['LUMA'] else 'V4'
-    cent = r // 2
+    cent = d // 2
     for iidx in range(0, max(ich // 4, 1), 2 if crelu else 1):
-        for y in range(r):
-            for x in range(r):
-                idx = y * r + x
+        for y in range(d):
+            for x in range(d):
+                idx = y * d + x
                 S(f'\t{stype} s{iidx}_{idx} = '
                   f'l{iidx // (2 if crelu else 1)}({x - cent}.0, {y - cent}.0);')
         if crelu:
-            for y in range(r):
-                for x in range(r):
-                    idx = y * r + x
+            for y in range(d):
+                for x in range(d):
+                    idx = y * d + x
                     S(f'\t{stype} s{iidx + 1}_{idx} = -max(-s{iidx}_{idx}, {stype}(0.0));')
                     S(f'\ts{iidx}_{idx} = max(s{iidx}_{idx}, {stype}(0.0));')
     for iidx in range(max(ich // 4, 1)):
-        for y in range(r):
-            for x in range(r):
-                weight(ws, x, y, ich, och, r, iidx, oidx)
+        for y in range(d):
+            for x in range(d):
+                weight(ws, x, y, ich, och, d, iidx, oidx)
     bn = k + 'bias'
     if bn in m:
         b = [str(v.item()) for v in m[bn][4*oidx:4*(oidx+1)]]
@@ -109,10 +109,10 @@ def write(ps, k, actfn, ins):
         ws = np.dstack((ws[:, :half], ws[:, half:])).reshape(sz)
     och = sz[0]
     ich = sz[1]
-    r = sz[2]
+    d = sz[2]
     texs = []
     for oidx in range(och // 4):
-        texs.append(out(ps, k, actfn, ins, ws, ich, och, r, oidx))
+        texs.append(out(ps, k, actfn, ins, ws, ich, och, d, oidx))
     return texs
 
 easu = """// FSR mpv | modified

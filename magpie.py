@@ -30,12 +30,12 @@ def S(txt, end='\n'):
 def fmt(v):
     return f'{v:.3e}' # enough for fp16
 
-def weight(ws, x, y, ich, och, r, iidx, oidx):
+def weight(ws, x, y, ich, och, d, iidx, oidx):
     s = f'\tr += '
     w = [fmt(v.item()) for v in ws[(4*oidx):(4*(1+oidx)), (4*iidx):(4*(1+iidx)),
                                    y, x].swapaxes(0, 1).flatten()]
     wflat = ", ".join(w)
-    l = f's{iidx}_{y * r + x}'
+    l = f's{iidx}_{y * d + x}'
     if len(w) > 4:
         s += f'mul({l}, M4({wflat}));\n'
     else:
@@ -132,7 +132,7 @@ def write(ps, k, actfn, ins):
         ws = np.dstack((ws[:, :half], ws[:, half:])).reshape(sz)
     och = sz[0]
     ich = sz[1]
-    r = sz[2]
+    d = sz[2]
     texs = [f'{ps}_{oidx}' for oidx in range(och // 4)]
     texs = prelude(ps, ins, loadfn=True, save=texs, multiout=True,
                    signed=(ps == 'out'))
@@ -146,13 +146,13 @@ def write(ps, k, actfn, ins):
     S('\t\treturn;')
     S('\t}')
     S('\tfloat2 pos = (gxy + 0.5) * pt;')
-    cent = r // 2
+    cent = d // 2
     stype = 'V4' if not ins == ['INPUT'] else 'min16float'
     vs = []
     for iidx in range(0, max(ich // 4, 1), 2 if crelup else 1):
         i = 0
-        for y in range(r):
-            for x in range(r):
+        for y in range(d):
+            for x in range(d):
                 v = f's{iidx}_{i}'
                 S(f'\t{stype} {v} = l{iidx // (2 if crelup else 1)}({x - cent}.0, {y - cent}.0);')
                 vs += [v]
@@ -160,15 +160,15 @@ def write(ps, k, actfn, ins):
         if not crelup:
             continue
         i = 0
-        for y in range(r):
-            for x in range(r):
+        for y in range(d):
+            for x in range(d):
                 v = f's{iidx + 1}_{i}'
                 S(f'\t{stype} {v} = -max(-s{iidx}_{i}, 0.0);')
                 vs += [v]
                 i += 1
         i = 0
-        for y in range(r):
-            for x in range(r):
+        for y in range(d):
+            for x in range(d):
                 S(f'\ts{iidx}_{i} = max(s{iidx}_{i}, 0.0);')
                 i += 1
     wfns = ''
@@ -176,9 +176,9 @@ def write(ps, k, actfn, ins):
         wfns += f'float4 f{oidx}(float2 pt, float2 pos, {", ".join(f"{stype} {v}" for v in vs)}) {openbr}\n'
         wfns += f'\tV4 r = 0.0;\n'
         for iidx in range(max(ich // 4, 1)):
-            for y in range(r):
-                for x in range(r):
-                    wfns += weight(ws, x, y, ich, och, r, iidx, oidx)
+            for y in range(d):
+                for x in range(d):
+                    wfns += weight(ws, x, y, ich, och, d, iidx, oidx)
         bn = k + 'bias'
         if bn in m:
             b = [fmt(v.item()) for v in m[bn][4*oidx:4*(oidx+1)]]
