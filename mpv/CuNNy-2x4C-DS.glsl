@@ -247,7 +247,6 @@ void hook() {
 		}
 	}
 	barrier();
-	memoryBarrierShared();
 	imageStore(out_image, opos + ivec2(0, 0), f0(xy.x, xy.y));
 }
 
@@ -319,7 +318,6 @@ void hook() {
 		}
 	}
 	barrier();
-	memoryBarrierShared();
 	imageStore(out_image, opos + ivec2(0, 0), f0(xy.x, xy.y));
 }
 
@@ -391,7 +389,6 @@ void hook() {
 		}
 	}
 	barrier();
-	memoryBarrierShared();
 	imageStore(out_image, opos + ivec2(0, 0), f0(xy.x, xy.y));
 }
 
@@ -463,7 +460,6 @@ void hook() {
 		}
 	}
 	barrier();
-	memoryBarrierShared();
 	imageStore(out_image, opos + ivec2(0, 0), f0(xy.x, xy.y));
 }
 

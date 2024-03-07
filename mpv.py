@@ -129,7 +129,6 @@ def write(ps, k, actfn, ins):
         S(f'\t\t\ts{iidx * 2}[ay][ax] = max(s{iidx * 2}[ay][ax], {stype}(0.0));')
     S(f'\t\t{closebr}\n\t{closebr}')
     S(f'\tbarrier();')
-    S(f'\tmemoryBarrierShared();')
     """
     for y in range(d):
         for x in range(d):
