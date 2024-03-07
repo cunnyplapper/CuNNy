@@ -34,7 +34,7 @@ def weight(ws, x, y, ich, och, d, iidx, oidx):
     w = [fmt(v.item()) for v in ws[(4*oidx):(4*(1+oidx)), (4*iidx):(4*(1+iidx)),
                                    y, x].swapaxes(0, 1).flatten()]
     s += (f'{"M4" if len(w) > 4 else "V4"}'
-          f'({", ".join(w)}) * s{iidx}_{y * d + x};\n')
+          f'({", ".join(w)}) * s{iidx}[y+{y}][x+{x}];\n')
     return s
 
 def prelude(ps, ins, nouts=1, ch=4, loadfn=False, save=None, upscale=None):
@@ -95,43 +95,61 @@ def write(ps, k, actfn, ins):
     nins = max(ich // 4 // (2 if crelup else 1), 1)
     nouts = och // 4
     prelude(ps, ins, nouts, loadfn=True, save=tex)
+    stype = 'F' if inv[0] == 'LUMA' else 'V4'
+    ssz = 8 + d - 1
+    for iidx in range(0, nins):
+        S(f'shared {stype} s{iidx * (2 if crelup else 1)}[{ssz}][{ssz}];')
+        if crelup:
+            S(f'shared {stype} s{iidx * 2 + 1}[{ssz}][{ssz}];')
     global shader
     start = len(shader)
     S(f'void hook() {openbr}')
-    S(f'\tivec2 pos = ivec2(gl_WorkGroupID.xy) * ivec2(8, 8) + '
-      f'ivec2(gl_LocalInvocationID.xy);')
+    S(f'\tivec2 xy = ivec2(gl_LocalInvocationID.xy);')
+    S(f'\tivec2 pos = ivec2(gl_WorkGroupID.xy) * ivec2(8, 8) + xy;')
     S(f'\tivec2 ipos = pos;')
     S(f'\tivec2 opos = pos * ivec2({nouts}, 1);')
     S(f'\tivec2 sz = ivec2(LUMA_size) - ivec2(1);')
     S(f'\tvec2 pt = {inv[0]}_pt;')
-    stype = 'F' if inv[0] == 'LUMA' else 'V4'
+    S(f'\t#pragma optionNV(unroll all)')
+    S(f'\tfor (int y = 0; y < {ssz}; y += 8) {openbr}')
+    S(f'\t\tint ay = xy.y + y;')
+    S(f'\t\tif (ay >= {ssz}) break;')
+    S(f'\t\t#pragma optionNV(unroll all)')
+    S(f'\t\tfor (int x = 0; x < {ssz}; x += 8) {openbr}')
+    S(f'\t\t\tint ax = xy.x + x;')
+    S(f'\t\t\tif (ax >= {ssz}) break;')
     cent = d // 2
-    vs = []
+    for iidx in range(0, nins):
+        S(f'\t\t\ts{iidx * (2 if crelup else 1)}[ay][ax] = '
+          f'l{iidx}(x - {cent}, y - {cent});')
+    for iidx in range(0, nins):
+        if not crelup:
+            break
+        S(f'\t\t\ts{iidx * 2 + 1}[ay][ax] = -max(-s{iidx * 2}[ay][ax], {stype}(0.0));')
+        S(f'\t\t\ts{iidx * 2}[ay][ax] = max(s{iidx * 2}[ay][ax], {stype}(0.0));')
+    S(f'\t\t{closebr}\n\t{closebr}')
+    S(f'\tbarrier();')
+    S(f'\tmemoryBarrierShared();')
+    """
     for y in range(d):
         for x in range(d):
             for iidx in range(0, nins):
-                idx = y * d + x
-                v = f's{iidx * (2 if crelup else 1)}_{idx}'
-                S(f'\t{stype} {v} = '
+                S(f'\ts{iidx * (2 if crelup else 1)}[{y}][{x}] = '
                   f'l{iidx}({(x - cent)}, {y - cent});')
-                vs += [v]
-                if crelup:
-                    vs += [f's{2 * iidx + 1}_{idx}']
     for iidx in range(0, 2 * nins, 2):
         if not crelup:
             break
         for y in range(d):
             for x in range(d):
-                idx = y * d + x
                 S(f'\t{stype} s{iidx + 1}_{idx} = -max(-s{iidx}_{idx}, {stype}(0.0));')
         for y in range(d):
             for x in range(d):
                 idx = y * d + x
                 S(f'\ts{iidx}_{idx} = max(s{iidx}_{idx}, {stype}(0.0));')
-    vs = sorted(vs)
+    """
     wfns = ''
     for oidx in range(nouts):
-        wfns += f'vec4 f{oidx}({", ".join(f"{stype} {v}" for v in vs)}) {openbr}\n'
+        wfns += f'vec4 f{oidx}(int x, int y) {openbr}\n'
         wfns += '\tV4 r = V4(0.0);\n'
         for iidx in range(max(ich // 4, 1)):
             for y in range(d):
@@ -141,11 +159,9 @@ def write(ps, k, actfn, ins):
         if bn in m:
             b = [fmt(v.item()) for v in m[bn][4*oidx:4*(oidx+1)]]
             wfns += f'\tr += V4({", ".join(b)});\n'
-        wfns += f'\treturn vec4({actfn.replace("X", "r")});\n'
-        wfns += f'\t\n'
+        wfns += f'\treturn {actfn.replace("X", "vec4(r)")};\n'
         wfns += f'{closebr}\n'
-        S(f'\timageStore(out_image, opos + ivec2({oidx}, 0),'
-          f' f{oidx}({", ".join(vs)}));')
+        S(f'\timageStore(out_image, opos + ivec2({oidx}, 0), f{oidx}(xy.x, xy.y));')
     S(f'{closebr}\n')
     shader = shader[:start] + wfns + shader[start:]
     return [(tex, nouts)]
