@@ -320,8 +320,10 @@ void hook() {
 		}
 	}
 	barrier();
-	imageStore(out_image, opos + ivec2(0, 0), f0(xy.x, xy.y));
-	imageStore(out_image, opos + ivec2(1, 0), f1(xy.x, xy.y));
+	vec4 r0 = f0(xy.x, xy.y);
+	vec4 r1 = f1(xy.x, xy.y);
+	imageStore(out_image, opos + ivec2(0, 0), r0);
+	imageStore(out_image, opos + ivec2(1, 0), r1);
 }
 
 
@@ -457,8 +459,10 @@ void hook() {
 		}
 	}
 	barrier();
-	imageStore(out_image, opos + ivec2(0, 0), f0(xy.x, xy.y));
-	imageStore(out_image, opos + ivec2(1, 0), f1(xy.x, xy.y));
+	vec4 r0 = f0(xy.x, xy.y);
+	vec4 r1 = f1(xy.x, xy.y);
+	imageStore(out_image, opos + ivec2(0, 0), r0);
+	imageStore(out_image, opos + ivec2(1, 0), r1);
 }
 
 
@@ -594,8 +598,10 @@ void hook() {
 		}
 	}
 	barrier();
-	imageStore(out_image, opos + ivec2(0, 0), f0(xy.x, xy.y));
-	imageStore(out_image, opos + ivec2(1, 0), f1(xy.x, xy.y));
+	vec4 r0 = f0(xy.x, xy.y);
+	vec4 r1 = f1(xy.x, xy.y);
+	imageStore(out_image, opos + ivec2(0, 0), r0);
+	imageStore(out_image, opos + ivec2(1, 0), r1);
 }
 
 
@@ -731,8 +737,10 @@ void hook() {
 		}
 	}
 	barrier();
-	imageStore(out_image, opos + ivec2(0, 0), f0(xy.x, xy.y));
-	imageStore(out_image, opos + ivec2(1, 0), f1(xy.x, xy.y));
+	vec4 r0 = f0(xy.x, xy.y);
+	vec4 r1 = f1(xy.x, xy.y);
+	imageStore(out_image, opos + ivec2(0, 0), r0);
+	imageStore(out_image, opos + ivec2(1, 0), r1);
 }
 
 
@@ -868,8 +876,10 @@ void hook() {
 		}
 	}
 	barrier();
-	imageStore(out_image, opos + ivec2(0, 0), f0(xy.x, xy.y));
-	imageStore(out_image, opos + ivec2(1, 0), f1(xy.x, xy.y));
+	vec4 r0 = f0(xy.x, xy.y);
+	vec4 r1 = f1(xy.x, xy.y);
+	imageStore(out_image, opos + ivec2(0, 0), r0);
+	imageStore(out_image, opos + ivec2(1, 0), r1);
 }
 
 
@@ -964,7 +974,8 @@ void hook() {
 		}
 	}
 	barrier();
-	imageStore(out_image, opos + ivec2(0, 0), f0(xy.x, xy.y));
+	vec4 r0 = f0(xy.x, xy.y);
+	imageStore(out_image, opos + ivec2(0, 0), r0);
 }
 
 

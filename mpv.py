@@ -160,7 +160,9 @@ def write(ps, k, actfn, ins):
             wfns += f'\tr += V4({", ".join(b)});\n'
         wfns += f'\treturn {actfn.replace("X", "vec4(r)")};\n'
         wfns += f'{closebr}\n'
-        S(f'\timageStore(out_image, opos + ivec2({oidx}, 0), f{oidx}(xy.x, xy.y));')
+        S(f'\tvec4 r{oidx} = f{oidx}(xy.x, xy.y);')
+    for oidx in range(nouts):
+        S(f'\timageStore(out_image, opos + ivec2({oidx}, 0), r{oidx});')
     S(f'{closebr}\n')
     shader = shader[:start] + wfns + shader[start:]
     return [(tex, nouts)]
