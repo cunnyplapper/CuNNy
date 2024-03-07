@@ -36,7 +36,7 @@ gargv, argv = argvs if len(argvs) == 2 else ([], *argvs)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('data', type=str)
-parser.add_argument('-C', '--chroma', action='store_true')
+parser.add_argument('-c', '--chroma', action='store_true')
 gargs = parser.parse_args(gargv)
 
 CHROMA = gargs.chroma
@@ -50,7 +50,7 @@ parser.add_argument('-b', '--batch', type=int, default=B)
 parser.add_argument('-l', '--lr', type=float, default=LR)
 parser.add_argument('-L', '--max-lr', type=float, default=MAX_LR)
 parser.add_argument('-w', '--weight-decay', type=float, default=W)
-parser.add_argument('-c', '--crelu', action='store_true')
+parser.add_argument('-C', '--crelu', action='store_true')
 parser.add_argument('-2', '--l2', action='store_true')
 allargs = [parser.parse_args(args) for args in split(argv, '+')]
 
@@ -108,7 +108,8 @@ FSR = f'{gargs.data}/easu'
 rcas = False
 if not os.path.isdir(FSR):
     FSR = next(
-        (f for f in os.listdir(f'{gargs.data}') if f.startswith('rcas-')), None)
+        (f'{gargs.data}/{f}' for f in os.listdir(f'{gargs.data}')
+         if f.startswith('rcas-')), None)
     if FSR:
         rcas = True
 
@@ -236,12 +237,18 @@ for args in allargs:
             avgl = runloss / nloss
             psnrv = psnr(pred, true)
             if epoch % 20 == 0 or epoch == E - 1:
+                diff = true[0] - pred[0]
+                norm = lambda x: torch.clamp(x / 0.2, 0., 1.)
+                diff = torch.cat((norm(-torch.min(diff, torch.tensor(0))),
+                                  norm(torch.max(diff, torch.tensor(0))),
+                                  torch.zeros_like(diff)))
                 imgs = (lasty, lastz, pred, true)
                 writer.add_images(
-                    'pred/true',
-                    torch.stack(tuple(x[0, 0] for x in imgs if len(x[0]) > 0))
-                         .unsqueeze(dim=1),
-                    global_step=epoch, dataformats='NCHW')
+                    'imgs',
+                    torch.stack(tuple(x[0].expand(3, -1, -1)
+                                      for x in imgs if len(x[0]) > 0) +
+                                (diff,)),
+                    global_step=epoch)
             writer.add_scalar('L', avgl, epoch + 1)
             writer.add_scalar('psnr', psnrv, epoch + 1)
         nloss = 0
