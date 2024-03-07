@@ -26,24 +26,31 @@ def S(txt, end='\n'):
     shader += txt + end
 
 def fmt(v):
-    return f'{v:.10f}'
+    return f'{v:.3e}' # enough for fp16
 
 def weight(ws, x, y, ich, och, d, iidx, oidx):
     cent = d // 2
-    S(f'\tr += ', end='')
-    w = [str(v.item()) for v in ws[(4*oidx):(4*(1+oidx)), (4*iidx):(4*(1+iidx)),
+    s = f'\tr += '
+    w = [fmt(v.item()) for v in ws[(4*oidx):(4*(1+oidx)), (4*iidx):(4*(1+iidx)),
                                    y, x].swapaxes(0, 1).flatten()]
-    S(f'{"M4" if len(w) > 4 else "V4"}({", ".join(w)}) * s{iidx}_{y * d + x};')
+    s += (f'{"M4" if len(w) > 4 else "V4"}'
+          f'({", ".join(w)}) * s{iidx}_{y * d + x};\n')
+    return s
 
-def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None):
+def prelude(ps, ins, nouts=1, ch=4, loadfn=False, save=None, upscale=None):
     S(f'')
     S(f'//!DESC CuNNy-{version}-{ps}')
     S(f'//!HOOK LUMA')
-    for inv in ins:
-        S(f'//!BIND {inv}')
     if save:
-        S(f'//!SAVE {save}')
-    S(f'//!WIDTH LUMA.w' + (f' {upscale} *' if upscale else ''))
+        S(f'//!COMPUTE {8 * nouts} 8 8 8')
+    for inv in ins:
+        S(f'//!BIND {inv[0]}')
+        if save:
+            if inv[0] != 'LUMA':
+                S(f'//!BIND LUMA')
+            S(f'//!SAVE {save}')
+    S(f'//!WIDTH LUMA.w' + (f' {upscale} *' if upscale else '') +
+      (f' {nouts} *' if nouts > 1 else ''))
     S(f'//!HEIGHT LUMA.h' + (f' {upscale} *' if upscale else ''))
     S(f'//!COMPONENTS {ch}')
     S(f'//!WHEN OUTPUT.w LUMA.w / 1.3 > OUTPUT.h LUMA.h / 1.3 > *')
@@ -58,51 +65,24 @@ def prelude(ps, ins, ch=4, loadfn=False, save=None, upscale=None):
     S(f'\t#define F float')
     S(f'#endif')
     if loadfn:
-        for i, inv in enumerate(ins):
-            idx = 2 * i if crelu else i
-            v = f'{inv}_texOff(vec2(x, y))'
-            if inv == 'LUMA':
-                S(f'#define l{idx}(x, y) F({v}.r)')
+        assert(len(ins) == 1)
+        inv = ins[0]
+        for i in range(inv[1]):
+            v = (f'texelFetch({inv[0]}_raw, clamp(ipos + ivec2(x, y), ivec2(0), sz)'
+                 f' * ivec2({inv[1]}, 1) + ivec2({i}, 0), 0)')
+            if inv[0] == 'LUMA':
+                S(f'#define l{i}(x, y) F({v}.r)')
             else:
-                S(f'#define l{idx}(x, y) V4({v})')
-    S(f'vec4 hook() {openbr}')
-    if save:
-        S(f'\tV4 r = V4(0.0);')
-
-def out(ps, k, actfn, ins, ws, ich, och, d, oidx):
-    ps = f'{ps}' + (f':{oidx}' if ps != 'out' else '')
-    tex = ps.replace(':', '_')
-    prelude(ps, ins, loadfn=True, save=tex)
-    stype = 'F' if ins == ['LUMA'] else 'V4'
-    cent = d // 2
-    for iidx in range(0, max(ich // 4, 1), 2 if crelu else 1):
-        for y in range(d):
-            for x in range(d):
-                idx = y * d + x
-                S(f'\t{stype} s{iidx}_{idx} = '
-                  f'l{iidx // (2 if crelu else 1)}({x - cent}.0, {y - cent}.0);')
-        if crelu:
-            for y in range(d):
-                for x in range(d):
-                    idx = y * d + x
-                    S(f'\t{stype} s{iidx + 1}_{idx} = -max(-s{iidx}_{idx}, {stype}(0.0));')
-                    S(f'\ts{iidx}_{idx} = max(s{iidx}_{idx}, {stype}(0.0));')
-    for iidx in range(max(ich // 4, 1)):
-        for y in range(d):
-            for x in range(d):
-                weight(ws, x, y, ich, och, d, iidx, oidx)
-    bn = k + 'bias'
-    if bn in m:
-        b = [str(v.item()) for v in m[bn][4*oidx:4*(oidx+1)]]
-        S(f'\tr += V4({", ".join(b)});')
-    S(f'\treturn vec4({actfn.replace("X", "r")});')
-    S(f'{closebr}\n')
-    return tex
+                S(f'#define l{i}(x, y) V4({v})')
+    if upscale:
+        S(f'vec4 hook() {openbr}')
 
 def write(ps, k, actfn, ins):
+    assert(len(ins) == 1)
+    inv = ins[0]
     ws = m[k+'weight']
     sz = ws.shape
-    crelup = crelu and ins != ['LUMA']
+    crelup = crelu and inv[0] != 'LUMA'
     if crelup:
         ws = ws.reshape(sz[0], -1, 4, sz[2], sz[3])
         half = ws.shape[1] // 2
@@ -110,10 +90,65 @@ def write(ps, k, actfn, ins):
     och = sz[0]
     ich = sz[1]
     d = sz[2]
-    texs = []
-    for oidx in range(och // 4):
-        texs.append(out(ps, k, actfn, ins, ws, ich, och, d, oidx))
-    return texs
+    tex = f'{ps}'
+    crelup = crelu and inv[0] != 'LUMA'
+    nins = max(ich // 4 // (2 if crelup else 1), 1)
+    nouts = och // 4
+    prelude(ps, ins, nouts, loadfn=True, save=tex)
+    global shader
+    start = len(shader)
+    S(f'void hook() {openbr}')
+    S(f'\tivec2 pos = ivec2(gl_WorkGroupID.xy) * ivec2(8, 8) + '
+      f'ivec2(gl_LocalInvocationID.xy);')
+    S(f'\tivec2 ipos = pos;')
+    S(f'\tivec2 opos = pos * ivec2({nouts}, 1);')
+    S(f'\tivec2 sz = ivec2(LUMA_size) - ivec2(1);')
+    S(f'\tvec2 pt = {inv[0]}_pt;')
+    stype = 'F' if inv[0] == 'LUMA' else 'V4'
+    cent = d // 2
+    vs = []
+    for y in range(d):
+        for x in range(d):
+            for iidx in range(0, nins):
+                idx = y * d + x
+                v = f's{iidx * (2 if crelup else 1)}_{idx}'
+                S(f'\t{stype} {v} = '
+                  f'l{iidx}({(x - cent)}, {y - cent});')
+                vs += [v]
+                if crelup:
+                    vs += [f's{2 * iidx + 1}_{idx}']
+    for iidx in range(0, 2 * nins, 2):
+        if not crelup:
+            break
+        for y in range(d):
+            for x in range(d):
+                idx = y * d + x
+                S(f'\t{stype} s{iidx + 1}_{idx} = -max(-s{iidx}_{idx}, {stype}(0.0));')
+        for y in range(d):
+            for x in range(d):
+                idx = y * d + x
+                S(f'\ts{iidx}_{idx} = max(s{iidx}_{idx}, {stype}(0.0));')
+    vs = sorted(vs)
+    wfns = ''
+    for oidx in range(nouts):
+        wfns += f'vec4 f{oidx}({", ".join(f"{stype} {v}" for v in vs)}) {openbr}\n'
+        wfns += '\tV4 r = V4(0.0);\n'
+        for iidx in range(max(ich // 4, 1)):
+            for y in range(d):
+                for x in range(d):
+                    wfns += weight(ws, x, y, ich, och, d, iidx, oidx)
+        bn = k + 'bias'
+        if bn in m:
+            b = [fmt(v.item()) for v in m[bn][4*oidx:4*(oidx+1)]]
+            wfns += f'\tr += V4({", ".join(b)});\n'
+        wfns += f'\treturn vec4({actfn.replace("X", "r")});\n'
+        wfns += f'\t\n'
+        wfns += f'{closebr}\n'
+        S(f'\timageStore(out_image, opos + ivec2({oidx}, 0),'
+          f' f{oidx}({", ".join(vs)}));')
+    S(f'{closebr}\n')
+    shader = shader[:start] + wfns + shader[start:]
+    return [(tex, nouts)]
 
 easu = """// FSR mpv | modified
 // Copyright (c) 2021 Advanced Micro Devices, Inc. All rights reserved.
@@ -382,7 +417,7 @@ if 'RCAS' in stem:
     fsrtex = 'rcas'
     S(rcas.replace('__SHARPNESS__', str(m['sharpness'])))
 
-texs = ['LUMA']
+texs = [('LUMA', 1)]
 nconv = 1
 relu = 'max(X, 0.0)' if not crelu else 'X'
 for k_ in m:
@@ -402,7 +437,7 @@ for k_ in m:
     elif k.startswith('cout'):
         texs = write('out', k_, 'tanh(X)', texs)
 
-prelude('shuffle', [*texs, fsrtex], ch=1, upscale=2)
+prelude('shuffle', [texs[0], (fsrtex, 1)], ch=1, upscale=2)
 S(f'\tvec4 r = vec4(0.0);')
 S(f'\tvec2 f = fract(out_pos * out_size);')
 S(f'\tivec2 i = ivec2(f * vec2(2.0));')
