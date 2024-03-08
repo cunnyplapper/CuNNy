@@ -56,13 +56,13 @@ def prelude(ps, ins, nouts=1, ch=4, loadfn=False, save=None, upscale=None):
     S(f'//!WHEN OUTPUT.w LUMA.w / 1.3 > OUTPUT.h LUMA.h / 1.3 > *')
     S(f'#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable')
     S(f'#ifdef GL_EXT_shader_explicit_arithmetic_types_float16')
-    S(f'\t#define V4 f16vec4')
-    S(f'\t#define M4 f16mat4')
-    S(f'\t#define F float16_t')
+    S(f'#\tdefine V4 f16vec4')
+    S(f'#\tdefine M4 f16mat4')
+    S(f'#\tdefine F float16_t')
     S(f'#else')
-    S(f'\t#define V4 vec4')
-    S(f'\t#define M4 mat4')
-    S(f'\t#define F float')
+    S(f'#\tdefine V4 vec4')
+    S(f'#\tdefine M4 mat4')
+    S(f'#\tdefine F float')
     S(f'#endif')
     if loadfn:
         assert(len(ins) == 1)
@@ -92,11 +92,11 @@ def write(ps, k, actfn, ins):
     d = sz[2]
     tex = f'{ps}'
     crelup = crelu and inv[0] != 'LUMA'
-    nins = max(ich // 4 // (2 if crelup else 1), 1)
     nouts = och // 4
     prelude(ps, ins, nouts, loadfn=True, save=tex)
     stype = 'F' if inv[0] == 'LUMA' else 'V4'
     ssz = 8 + d - 1
+    nins = max(ich // 4 // (2 if crelup else 1), 1)
     for iidx in range(0, nins):
         S(f'shared {stype} s{iidx * (2 if crelup else 1)}[{ssz}][{ssz}];')
         if crelup:
@@ -129,23 +129,6 @@ def write(ps, k, actfn, ins):
         S(f'\t\t\ts{iidx * 2}[ay][ax] = max(s{iidx * 2}[ay][ax], {stype}(0.0));')
     S(f'\t\t{closebr}\n\t{closebr}')
     S(f'\tbarrier();')
-    """
-    for y in range(d):
-        for x in range(d):
-            for iidx in range(0, nins):
-                S(f'\ts{iidx * (2 if crelup else 1)}[{y}][{x}] = '
-                  f'l{iidx}({(x - cent)}, {y - cent});')
-    for iidx in range(0, 2 * nins, 2):
-        if not crelup:
-            break
-        for y in range(d):
-            for x in range(d):
-                S(f'\t{stype} s{iidx + 1}_{idx} = -max(-s{iidx}_{idx}, {stype}(0.0));')
-        for y in range(d):
-            for x in range(d):
-                idx = y * d + x
-                S(f'\ts{iidx}_{idx} = max(s{iidx}_{idx}, {stype}(0.0));')
-    """
     wfns = ''
     for oidx in range(nouts):
         wfns += f'vec4 f{oidx}(int x, int y) {openbr}\n'
@@ -163,7 +146,7 @@ def write(ps, k, actfn, ins):
         S(f'\tvec4 r{oidx} = f{oidx}(xy.x, xy.y);')
     for oidx in range(nouts):
         S(f'\timageStore(out_image, opos + ivec2({oidx}, 0), r{oidx});')
-    S(f'{closebr}\n')
+    S(f'{closebr}')
     shader = shader[:start] + wfns + shader[start:]
     return [(tex, nouts)]
 
