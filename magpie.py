@@ -12,7 +12,7 @@ with open(sys.argv[1], 'rb') as f:
 shader = ''
 N = sum(1 for x in m.keys() if 'conv' in x and 'weight' in x)
 D = next(m[x] for x in m if 'cin' in x and 'weight' in x).shape[0]
-CHROMA = 'fancyluma.weight' in m
+RGB = 'fancyluma.weight' in m
 stem = Path(sys.argv[1]).stem
 version = stem[:stem.rfind('-')]
 usercas = 'RCAS' in stem
@@ -109,7 +109,7 @@ def prelude(ps, ins, loadfn=False, save=None, upscale=None, multiout=False,
         for i, inv in enumerate(ins):
             fn = f'O({inv}, float2(x, y))'
             if inv == 'INPUT':
-                if CHROMA:
+                if RGB:
                     lw = ', '.join([fmt(v.item())
                                     for v in m['fancyluma.weight'].flatten()])
                     lb = fmt(m['fancyluma.bias'].item())

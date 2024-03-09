@@ -10,11 +10,12 @@ with open(sys.argv[1], 'rb') as f:
 shader = ''
 N = sum(1 for x in m.keys() if 'conv' in x and 'weight' in x)
 D = next(m[x] for x in m if 'in' in x and 'weight' in x).shape[0]
+RGB = 'fancyluma.weight' in m
 stem = Path(sys.argv[1]).stem
 version = stem[:stem.rfind('-')]
 usercas = 'RCAS' in stem
 usefsr = 'BILINEAR' not in stem
-usechroma = 'CHROMA' in stem
+assert(not RGB)
 crelu = m['crelu']
 
 # thanks vim

@@ -36,10 +36,10 @@ gargv, argv = argvs if len(argvs) == 2 else ([], *argvs)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('data', type=str)
-parser.add_argument('-c', '--chroma', action='store_true')
+parser.add_argument('-R', '--rgb', action='store_true')
 gargs = parser.parse_args(gargv)
 
-CHROMA = gargs.chroma
+RGB = gargs.rgb
 
 parser = argparse.ArgumentParser()
 parser.add_argument('N', type=int)
@@ -82,7 +82,7 @@ class Dataset(torch.utils.data.Dataset):
     def __init__(self, dirx, dirz, dirtrue, transform):
         self.files = os.listdir(dirtrue)
         with Pool() as pool:
-            if CHROMA:
+            if RGB:
                 self.x, xl = zip(*loadall(
                     pool, dirx, self.files, transform, ['RGB', 'L']))
             else:
@@ -130,7 +130,7 @@ for args in allargs:
     W = args.weight_decay
 
     def act(x):
-        if CHROMA: # TODO: stop using chroma an an alias for magpie
+        if RGB: # TODO: stop using RGB an an alias for magpie
             # on magpie, you can increase performance by using lower precision
             # texture format like RGBA8_SNORM. however as the name implies, it
             # requires every value to be in [-1, 1]. larger models seem to
@@ -151,7 +151,7 @@ for args in allargs:
         def __init__(self):
             super(Net, self).__init__()
             M = 2 if CRELU else 1
-            if CHROMA:
+            if RGB:
                 self.fancyluma = nn.Conv2d(3, 1, 1, padding='same')
             self.cin = nn.Conv2d(1, D, 3, padding='same')
             self.conv = nn.ModuleList()
@@ -178,7 +178,7 @@ for args in allargs:
             nn.init.zeros_(self.cout.bias)
 
         def forward(self, x, y, z):
-            if CHROMA:
+            if RGB:
                 x = self.fancyluma(x)
             x = act(self.cin(x))
             for conv in self.conv:
@@ -201,7 +201,7 @@ for args in allargs:
     fn = ''
     suf = (
         ('RCAS-' if rcas else 'BILINEAR-' if FSR is None else '') +
-        ('CHROMA-' if CHROMA else '') +
+        ('RGB-' if RGB else '') +
         (args.suffix + '-' if args.suffix else '')
     )
     version = f'{N}x{D}{"C" if CRELU else ""}-{suf}'
