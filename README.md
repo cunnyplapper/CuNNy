@@ -19,6 +19,7 @@ being the fastest and `3x32` being the slowest.
 Variants:
 - `RCAS`: Provide slightly sharper results for a very small cost in performance
    (which becomes negligible the bigger the model).
+- `DN`: Trained to denoise images.
 - `DS`: Trained to denoise & sharpen images.
 - `NVL`: Trained on VN screenshots/CG.
 
