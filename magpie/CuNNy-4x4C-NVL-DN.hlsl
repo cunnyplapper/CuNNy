@@ -16,12 +16,16 @@
 /* ------------------------------------------------------------------- */
 
 //!MAGPIE EFFECT
-//!VERSION 3
-//!OUTPUT_WIDTH INPUT_WIDTH * 2
-//!OUTPUT_HEIGHT INPUT_HEIGHT * 2
+//!VERSION 4
+//!SORT_NAME CuNNy-DN-D04N04
 
 //!TEXTURE
 Texture2D INPUT;
+
+//!TEXTURE
+//!WIDTH INPUT_WIDTH * 2
+//!HEIGHT INPUT_HEIGHT * 2
+Texture2D OUTPUT;
 
 
 //!SAMPLER
@@ -87,6 +91,7 @@ void Pass1(uint2 blockStart, uint3 tid) {
 	min16float s0_8 = l0(1.0, 1.0);
 	t0[gxy] = f0(pt, pos, s0_0, s0_1, s0_2, s0_3, s0_4, s0_5, s0_6, s0_7, s0_8);
 }
+
 //!PASS 2
 //!DESC CuNNy-4x4C-BILINEAR-RGB-NVL-DN-conv1
 //!BLOCK_SIZE 8
@@ -157,6 +162,7 @@ void Pass2(uint2 blockStart, uint3 tid) {
 	s0_8 = max(s0_8, 0.0);
 	t1[gxy] = f0(pt, pos, s0_0, s0_1, s0_2, s0_3, s0_4, s0_5, s0_6, s0_7, s0_8, s1_0, s1_1, s1_2, s1_3, s1_4, s1_5, s1_6, s1_7, s1_8);
 }
+
 //!PASS 3
 //!DESC CuNNy-4x4C-BILINEAR-RGB-NVL-DN-conv2
 //!BLOCK_SIZE 8
@@ -227,6 +233,7 @@ void Pass3(uint2 blockStart, uint3 tid) {
 	s0_8 = max(s0_8, 0.0);
 	t0[gxy] = f0(pt, pos, s0_0, s0_1, s0_2, s0_3, s0_4, s0_5, s0_6, s0_7, s0_8, s1_0, s1_1, s1_2, s1_3, s1_4, s1_5, s1_6, s1_7, s1_8);
 }
+
 //!PASS 4
 //!DESC CuNNy-4x4C-BILINEAR-RGB-NVL-DN-conv3
 //!BLOCK_SIZE 8
@@ -297,6 +304,7 @@ void Pass4(uint2 blockStart, uint3 tid) {
 	s0_8 = max(s0_8, 0.0);
 	t1[gxy] = f0(pt, pos, s0_0, s0_1, s0_2, s0_3, s0_4, s0_5, s0_6, s0_7, s0_8, s1_0, s1_1, s1_2, s1_3, s1_4, s1_5, s1_6, s1_7, s1_8);
 }
+
 //!PASS 5
 //!DESC CuNNy-4x4C-BILINEAR-RGB-NVL-DN-conv4
 //!BLOCK_SIZE 8
@@ -367,6 +375,7 @@ void Pass5(uint2 blockStart, uint3 tid) {
 	s0_8 = max(s0_8, 0.0);
 	t0[gxy] = f0(pt, pos, s0_0, s0_1, s0_2, s0_3, s0_4, s0_5, s0_6, s0_7, s0_8, s1_0, s1_1, s1_2, s1_3, s1_4, s1_5, s1_6, s1_7, s1_8);
 }
+
 //!PASS 6
 //!DESC CuNNy-4x4C-BILINEAR-RGB-NVL-DN-out
 //!BLOCK_SIZE 8
@@ -437,10 +446,12 @@ void Pass6(uint2 blockStart, uint3 tid) {
 	s0_8 = max(s0_8, 0.0);
 	t1[gxy] = f0(pt, pos, s0_0, s0_1, s0_2, s0_3, s0_4, s0_5, s0_6, s0_7, s0_8, s1_0, s1_1, s1_2, s1_3, s1_4, s1_5, s1_6, s1_7, s1_8);
 }
+
 //!PASS 7
 //!DESC CuNNy-4x4C-BILINEAR-RGB-NVL-DN-shuffle
 //!STYLE PS
 //!IN t1, INPUT
+//!OUT OUTPUT
 float4 Pass7(float2 pos) {
 	float2 pt = float2(GetInputPt());
 	static const float3x3 rgb2yuv = {0.299, 0.587, 0.114, -0.169, -0.331, 0.5, 0.5, -0.419, -0.081};

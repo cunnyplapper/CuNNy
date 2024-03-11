@@ -19,6 +19,9 @@ usercas = 'RCAS' in stem
 usefsr = 'BILINEAR' not in stem
 crelu = m['crelu']
 
+# TODO: replace suffix system with something better
+assert('NVL' in version)
+
 # thanks vim
 openbr = '{'
 closebr = '}'
@@ -43,12 +46,16 @@ def weight(ws, x, y, ich, och, d, iidx, oidx):
     return s
 
 header = """//!MAGPIE EFFECT
-//!VERSION 3
-//!OUTPUT_WIDTH INPUT_WIDTH * 2
-//!OUTPUT_HEIGHT INPUT_HEIGHT * 2
+//!VERSION 4
+//!SORT_NAME __SORT__
 
 //!TEXTURE
 Texture2D INPUT;
+
+//!TEXTURE
+//!WIDTH INPUT_WIDTH * 2
+//!HEIGHT INPUT_HEIGHT * 2
+Texture2D OUTPUT;
 
 __FSR__
 //!SAMPLER
@@ -101,10 +108,12 @@ def prelude(ps, ins, loadfn=False, save=None, upscale=None, multiout=False,
     S(f'//!IN ' + ', '.join(ins))
     if save:
         save = allocimgs(ins, len(save))
-        S(f'//!OUT {", ".join(save) if save else "OUTPUT"}')
+        S(f'//!OUT {", ".join(save)}')
         S('#define O(t, p) t.SampleLevel(SP, pos + p * pt, 0)')
         S('#define V4 min16float4')
         S('#define M4 min16float4x4')
+    else:
+        S(f'//!OUT OUTPUT')
     if loadfn:
         for i, inv in enumerate(ins):
             fn = f'O({inv}, float2(x, y))'
@@ -186,7 +195,7 @@ def write(ps, k, actfn, ins):
         wfns += f'\treturn {actfn.replace("X", f"r")};\n'
         wfns += closebr + '\n'
         S(f'\t{texs[oidx]}[gxy] = f{oidx}(pt, pos, {", ".join(vs)});')
-    S(f'{closebr}')
+    S(f'{closebr}\n')
     shader = shader[:start] + wfns + shader[start:]
     return texs
 
@@ -480,7 +489,11 @@ fsrhdr = fsrhdrbase + 'easu;\n'
 if usercas:
     fsrhdr += '\n' + fsrhdrbase + 'rcas;\n'
 
-shader = header.replace('__FSR__', fsrhdr if usefsr else '') + shader
+suf = version[version.rfind("NVL")+3:].replace('-', '')
+suf += '-' if suf != '' else ''
+shader = header \
+    .replace('__SORT__', f'CuNNy-{suf}D{D:02}N{N:02}') \
+    .replace('__FSR__', fsrhdr if usefsr else '') + shader
 prelude('shuffle', [*texs, 'INPUT'] + ([fsrtex] if usefsr else []), upscale=2)
 S('\tstatic const float3x3 rgb2yuv = {0.299, 0.587, 0.114, -0.169, -0.331, 0.5, 0.5, -0.419, -0.081};')
 S('\tstatic const float3x3 yuv2rgb = {1, -0.00093, 1.401687, 1, -0.3437, -0.71417, 1, 1.77216, 0.00099};')
