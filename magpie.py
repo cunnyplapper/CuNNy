@@ -56,7 +56,6 @@ Texture2D INPUT;
 //!WIDTH INPUT_WIDTH * 2
 //!HEIGHT INPUT_HEIGHT * 2
 Texture2D OUTPUT;
-
 __FSR__
 //!SAMPLER
 //!FILTER POINT
@@ -65,6 +64,11 @@ SamplerState SP;
 //!SAMPLER
 //!FILTER LINEAR
 SamplerState SL;
+
+//!COMMON
+#define O(t, p) t.SampleLevel(SP, pos + p * pt, 0)
+#define V4 min16float4
+#define M4 min16float4x4
 
 """
 
@@ -94,27 +98,23 @@ def allocimgs(ins, n):
     return out
 
 npass = (2 if usercas else 1) if usefsr else 0
-def prelude(ps, ins, loadfn=False, save=None, upscale=None, multiout=False,
-            signed=False):
+def prelude(ps, ins, loadfn=False, save=None, multiout=False, signed=False):
     global header, npass
     npass += 1
+    shuffle = ps == 'out-shuffle'
+    save = None if shuffle else save
     S(f'//!PASS {npass}')
     S(f'//!DESC CuNNy-{version}-{ps}')
-    if upscale:
-        S(f'//!STYLE PS')
-    else:
-        S(f'//!BLOCK_SIZE 8')
-        S(f'//!NUM_THREADS 64')
-    S(f'//!IN ' + ', '.join(ins))
+    S(f'//!BLOCK_SIZE {16 if shuffle else 8}')
+    S(f'//!NUM_THREADS 64')
+    S(f'//!IN ' + ', '.join((['INPUT'] if shuffle else []) + ins))
     if save:
         save = allocimgs(ins, len(save))
         S(f'//!OUT {", ".join(save)}')
-        S('#define O(t, p) t.SampleLevel(SP, pos + p * pt, 0)')
-        S('#define V4 min16float4')
-        S('#define M4 min16float4x4')
     else:
         S(f'//!OUT OUTPUT')
     if loadfn:
+        S('')
         for i, inv in enumerate(ins):
             fn = f'O({inv}, float2(x, y))'
             if inv == 'INPUT':
@@ -126,9 +126,7 @@ def prelude(ps, ins, loadfn=False, save=None, upscale=None, multiout=False,
                 else:
                     fn = f'dot(float3(0.299, 0.587, 0.114), {fn}.rgb)'
             S(f'#define l{i}(x, y) {fn}')
-    if upscale:
-        S(f'float4 Pass{npass}(float2 pos) {openbr}')
-        S(f'\tfloat2 pt = float2(GetInputPt());')
+    S('')
     return save
 
 def write(ps, k, actfn, ins):
@@ -143,22 +141,32 @@ def write(ps, k, actfn, ins):
     ich = sz[1]
     d = sz[2]
     texs = [f'{ps}_{oidx}' for oidx in range(och // 4)]
+    shuffle = ps == 'out-shuffle'
     texs = prelude(ps, ins, loadfn=True, save=texs, multiout=True,
                    signed=(ps == 'out'))
     global shader
     start = len(shader)
     S(f'void Pass{npass}(uint2 blockStart, uint3 tid) {openbr}')
     S(f'\tfloat2 pt = float2(GetInputPt());')
-    S('\tuint2 gxy = Rmp8x8(tid.x) + blockStart;')
-    S('\tuint2 size = GetInputSize();')
+    if shuffle:
+        S('\tuint2 gxy = (Rmp8x8(tid.x) << 1) + blockStart;')
+    else:
+        S('\tuint2 gxy = Rmp8x8(tid.x) + blockStart;')
+    S(f'\tuint2 size = Get{"Output" if shuffle else "Input"}Size();')
     S('\tif (gxy.x >= size.x || gxy.y >= size.y) {')
     S('\t\treturn;')
     S('\t}')
-    S('\tfloat2 pos = (gxy + 0.5) * pt;')
+    if shuffle:
+        S('\tfloat2 pos = ((gxy >> 1) + 0.5) * pt;')
+    else:
+        S('\tfloat2 pos = (gxy + 0.5) * pt;')
+    S('')
     cent = d // 2
     stype = 'V4' if not ins == ['INPUT'] else 'min16float'
     vs = []
     for iidx in range(0, max(ich // 4, 1), 2 if crelup else 1):
+        if iidx > 0:
+            S('')
         i = 0
         for y in range(d):
             for x in range(d):
@@ -180,9 +188,10 @@ def write(ps, k, actfn, ins):
             for x in range(d):
                 S(f'\ts{iidx}_{i} = max(s{iidx}_{i}, 0.0);')
                 i += 1
+    S('')
     wfns = ''
     for oidx in range(och // 4):
-        wfns += f'float4 f{oidx}(float2 pt, float2 pos, {", ".join(f"{stype} {v}" for v in vs)}) {openbr}\n'
+        wfns += f'float4 f{oidx}({", ".join(f"{stype} {v}" for v in vs)}) {openbr}\n'
         wfns += f'\tV4 r = 0.0;\n'
         for iidx in range(max(ich // 4, 1)):
             for y in range(d):
@@ -193,9 +202,34 @@ def write(ps, k, actfn, ins):
             b = [fmt(v.item()) for v in m[bn][4*oidx:4*(oidx+1)]]
             wfns += f'\tr += V4({", ".join(b)});\n'
         wfns += f'\treturn {actfn.replace("X", f"r")};\n'
-        wfns += closebr + '\n'
-        S(f'\t{texs[oidx]}[gxy] = f{oidx}(pt, pos, {", ".join(vs)});')
-    S(f'{closebr}\n')
+        wfns += closebr + '\n\n'
+        call = f'f{oidx}({", ".join(vs)})'
+        if shuffle:
+            S(f'\tV4 r = {call};\n')
+        else:
+            S(f'\t{texs[oidx]}[gxy] = {call};')
+    if shuffle:
+        S('\tstatic const float3x3 rgb2yuv = {0.299, 0.587, 0.114, -0.169, -0.331, 0.5, 0.5, -0.419, -0.081};')
+        S('\tstatic const float3x3 yuv2rgb = {1, -0.00093, 1.401687, 1, -0.3437, -0.71417, 1, 1.77216, 0.00099};')
+        S('\tfloat2 opt = float2(GetOutputPt());\n')
+        S('\tpos -= 0.5f * opt;')
+        S('\tfloat3 yuv = mul(rgb2yuv, INPUT.SampleLevel(SL, pos, 0).rgb);')
+        S('\tOUTPUT[gxy] = float4(mul(yuv2rgb, float3(saturate(yuv.r + r.x), yuv.yz)), 1);\n')
+        S('\t++gxy.x;')
+        S('\tpos.x += opt.x;')
+        S('\tyuv = mul(rgb2yuv, INPUT.SampleLevel(SL, pos, 0).rgb);')
+        S('\tOUTPUT[gxy] = float4(mul(yuv2rgb, float3(saturate(yuv.r + r.y), yuv.yz)), 1);\n')
+        S('\t++gxy.y;')
+        S('\tpos.y += opt.y;')
+        S('\tyuv = mul(rgb2yuv, INPUT.SampleLevel(SL, pos, 0).rgb);')
+        S('\tOUTPUT[gxy] = float4(mul(yuv2rgb, float3(saturate(yuv.r + r.w), yuv.yz)), 1);\n')
+        S('\t--gxy.x;')
+        S('\tpos.x -= opt.x;')
+        S('\tyuv = mul(rgb2yuv, INPUT.SampleLevel(SL, pos, 0).rgb);')
+        S('\tOUTPUT[gxy] = float4(mul(yuv2rgb, float3(saturate(yuv.r + r.z), yuv.yz)), 1);')
+    S(f'{closebr}')
+    if not shuffle:
+        S('')
     shader = shader[:start] + wfns + shader[start:]
     return texs
 
@@ -430,25 +464,25 @@ float4 Pass2(float2 pos) {
 }
 """
 
-lgpl = """
-// This program is free software; you can redistribute it and/or
-// modify it under the terms of the GNU Lesser General Public
-// License as published by the Free Software Foundation; either
-// version 3.0 of the License, or (at your option) any later version.
+gpl = """
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
 // 
 // This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-// Lesser General Public License for more details.
 // 
-// You should have received a copy of the GNU Lesser General Public
-// License along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+// 
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
 """
 
-S(f'// CuNNy {version.replace("-", " ")}')
-S(f'// Copyright (c) 2024 cunnyplapper')
-S(lgpl, end='')
-S('/* ------------------------------------------------------------------- */\n')
+S(f'// CuNNy {version.replace("-", " ")} - https://github.com/cunnyplapper/CuNNy')
+S(gpl, end='')
 header = shader + header
 shader = ''
 
@@ -477,7 +511,7 @@ for k_ in m:
         texs = write(f'conv{nconv}', k_, relu, texs)
         nconv += 1
     elif k.startswith('cout'):
-        texs = write('out', k_, 'tanh(X)', texs)
+        texs = write('out-shuffle', k_, 'tanh(X)', texs)
 
 fsrhdrbase = """//!TEXTURE
 //!WIDTH INPUT_WIDTH * 2
@@ -493,25 +527,7 @@ suf = version[version.rfind("NVL")+3:].replace('-', '')
 suf += '-' if suf != '' else ''
 shader = header \
     .replace('__SORT__', f'CuNNy-{suf}D{D:02}N{N:02}') \
-    .replace('__FSR__', fsrhdr if usefsr else '') + shader
-prelude('shuffle', [*texs, 'INPUT'] + ([fsrtex] if usefsr else []), upscale=2)
-S('\tstatic const float3x3 rgb2yuv = {0.299, 0.587, 0.114, -0.169, -0.331, 0.5, 0.5, -0.419, -0.081};')
-S('\tstatic const float3x3 yuv2rgb = {1, -0.00093, 1.401687, 1, -0.3437, -0.71417, 1, 1.77216, 0.00099};')
-S(f'\tfloat4 r = 0.0;')
-S(f'\tfloat2 size = float2(GetInputSize());')
-S(f'\tfloat2 f = frac(pos * size);')
-S(f'\tfloat3 yuv = mul(rgb2yuv, INPUT.SampleLevel(SL, pos, 0).rgb);')
-S(f'\tint2 i = int2(f * 2.0);')
-S(f'\tr.r = {texs[0]}.SampleLevel(SP, (float2(0.5, 0.5) - f) * pt + pos, 0)[2*i.y + i.x];')
-if usefsr:
-    S(f'\tr.r += {fsrtex}.SampleLevel(SP, pos, 0).r;')
-else:
-    S(f'\tr.r += yuv.r;')
-S(f'\tr.a = 1.0;')
-S(f'\tr.r = clamp(r, 0.0, 1.0);')
-S(f'\tfloat3 px = mul(yuv2rgb, float3(r.r, yuv.yz));')
-S(f'\treturn float4(px, 1.0);')
-S(f'{closebr}')
+    .replace('__FSR__', fsrhdr + '\n' if usefsr else '') + shader
 
 fp = f'test/CuNNy-{stem}.hlsl'
 with open(fp, 'w') as f:
