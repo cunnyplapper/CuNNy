@@ -28,8 +28,7 @@ Variants:
 Tested training with PyTorch nightly. If any errors arise try using nightly.
 
 Prepare data by running `sh scripts/build.sh`, then `sh scripts/split.sh
-<input-folder> <output-128-grids>`, then `sh scripts/proc.sh <128-grids>
-<use-rcas>`.
+<input-folder> <output-128-grids>`, then `py scripts/proc.py <128-grids> <out>`.
 
 To train `py train.py <data> <N> <D>` where `N` is the number of internal
 convolutions and `D` is the number of feature layers.
