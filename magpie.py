@@ -98,13 +98,14 @@ def allocimgs(ins, n):
     return out
 
 npass = (2 if usercas else 1) if usefsr else 0
-def prelude(ps, ins, loadfn=False, save=None, multiout=False, signed=False):
+def prelude(ps, ins, stype, loadfn=False, save=None, multiout=False,
+            signed=False):
     global header, npass
     npass += 1
     shuffle = ps == 'out-shuffle'
     save = None if shuffle else save
     S(f'//!PASS {npass}')
-    S(f'//!DESC CuNNy-{version}-{ps}')
+    S(f'//!DESC {ps}')
     S(f'//!BLOCK_SIZE {16 if shuffle else 8}')
     S(f'//!NUM_THREADS 64')
     S(f'//!IN ' + ', '.join((['INPUT'] if shuffle else []) + ins))
@@ -122,10 +123,10 @@ def prelude(ps, ins, loadfn=False, save=None, multiout=False, signed=False):
                     lw = ', '.join([fmt(v.item())
                                     for v in m['fancyluma.weight'].flatten()])
                     lb = fmt(m['fancyluma.bias'].item())
-                    fn = f'(dot(float3({lw}), {fn}.rgb) + {lb})'
+                    fn = f'dot(float3({lw}), {fn}.rgb) + {lb}'
                 else:
                     fn = f'dot(float3(0.299, 0.587, 0.114), {fn}.rgb)'
-            S(f'#define l{i}(x, y) {fn}')
+            S(f'#define l{i}(x, y) {stype}({fn})')
     S('')
     return save
 
@@ -142,7 +143,8 @@ def write(ps, k, actfn, ins):
     d = sz[2]
     texs = [f'{ps}_{oidx}' for oidx in range(och // 4)]
     shuffle = ps == 'out-shuffle'
-    texs = prelude(ps, ins, loadfn=True, save=texs, multiout=True,
+    stype = 'V4' if not ins == ['INPUT'] else 'min16float'
+    texs = prelude(ps, ins, stype, loadfn=True, save=texs, multiout=True,
                    signed=(ps == 'out'))
     global shader
     start = len(shader)
@@ -162,7 +164,6 @@ def write(ps, k, actfn, ins):
         S('\tfloat2 pos = (gxy + 0.5) * pt;')
     S('')
     cent = d // 2
-    stype = 'V4' if not ins == ['INPUT'] else 'min16float'
     vs = []
     for iidx in range(0, max(ich // 4, 1), 2 if crelup else 1):
         if iidx > 0:
@@ -191,7 +192,7 @@ def write(ps, k, actfn, ins):
     S('')
     wfns = ''
     for oidx in range(och // 4):
-        wfns += f'float4 f{oidx}({", ".join(f"{stype} {v}" for v in vs)}) {openbr}\n'
+        wfns += f'V4 f{oidx}({", ".join(f"{stype} {v}" for v in vs)}) {openbr}\n'
         wfns += f'\tV4 r = 0.0;\n'
         for iidx in range(max(ich // 4, 1)):
             for y in range(d):
