@@ -125,8 +125,7 @@ def write(ps, k, actfn, ins):
     S(f'\tivec2 opos = pos * ivec2({w}, {h});')
     iw, ih = rectdim(inv[1])
     gather = iw % 2 == 0 and ih % 2 == 0
-    if not gather:
-        S(f'\tivec2 sz = ivec2(LUMA_size) - ivec2(1);')
+    S(f'\tivec2 sz = ivec2(LUMA_size) - ivec2(1);')
     S(f'\tvec2 pt = {inv[0]}_pt;')
     S(f'\t#pragma optionNV(unroll all)')
     S(f'\tfor (int y = 0; y < {ssz}; y += 8) {openbr}')
@@ -142,7 +141,8 @@ def write(ps, k, actfn, ins):
         S('\t\t\tvec2 p;')
         for y in range(0, ih, 2):
             for x in range(0, iw, 2):
-                S(f'\t\t\tp = vec2((pos + ivec2(x - {cent}, y - {cent}))'
+                S(f'\t\t\tp = vec2(clamp(pos + ivec2(x - {cent}, y - {cent}), '
+                                         'ivec2(0), sz)'
                   f' * ivec2({iw}, {ih}) + ivec2({x + 1}, {y + 1}))'
                   f' * {inv[0]}_pt;')
                 for j, c in enumerate('rgba'):

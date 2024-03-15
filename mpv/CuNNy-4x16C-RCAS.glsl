@@ -376,6 +376,7 @@ void hook() {
 	ivec2 xy = ivec2(gl_LocalInvocationID.xy);
 	ivec2 pos = ivec2(gl_WorkGroupID.xy) * ivec2(8, 8) + xy;
 	ivec2 opos = pos * ivec2(2, 2);
+	ivec2 sz = ivec2(LUMA_size) - ivec2(1);
 	vec2 pt = in_pt;
 	#pragma optionNV(unroll all)
 	for (int y = 0; y < 10; y += 8) {
@@ -386,7 +387,7 @@ void hook() {
 			int ax = xy.x + x;
 			if (ax >= 10) break;
 			vec2 p;
-			p = vec2((pos + ivec2(x - 1, y - 1)) * ivec2(2, 2) + ivec2(1, 1)) * in_pt;
+			p = vec2(clamp(pos + ivec2(x - 1, y - 1), ivec2(0), sz) * ivec2(2, 2) + ivec2(1, 1)) * in_pt;
 			V4 sr0 = V4(in_gather(p, 0));
 			V4 sg0 = V4(in_gather(p, 1));
 			V4 sb0 = V4(in_gather(p, 2));
@@ -798,6 +799,7 @@ void hook() {
 	ivec2 xy = ivec2(gl_LocalInvocationID.xy);
 	ivec2 pos = ivec2(gl_WorkGroupID.xy) * ivec2(8, 8) + xy;
 	ivec2 opos = pos * ivec2(2, 2);
+	ivec2 sz = ivec2(LUMA_size) - ivec2(1);
 	vec2 pt = conv1_pt;
 	#pragma optionNV(unroll all)
 	for (int y = 0; y < 10; y += 8) {
@@ -808,7 +810,7 @@ void hook() {
 			int ax = xy.x + x;
 			if (ax >= 10) break;
 			vec2 p;
-			p = vec2((pos + ivec2(x - 1, y - 1)) * ivec2(2, 2) + ivec2(1, 1)) * conv1_pt;
+			p = vec2(clamp(pos + ivec2(x - 1, y - 1), ivec2(0), sz) * ivec2(2, 2) + ivec2(1, 1)) * conv1_pt;
 			V4 sr0 = V4(conv1_gather(p, 0));
 			V4 sg0 = V4(conv1_gather(p, 1));
 			V4 sb0 = V4(conv1_gather(p, 2));
@@ -1220,6 +1222,7 @@ void hook() {
 	ivec2 xy = ivec2(gl_LocalInvocationID.xy);
 	ivec2 pos = ivec2(gl_WorkGroupID.xy) * ivec2(8, 8) + xy;
 	ivec2 opos = pos * ivec2(2, 2);
+	ivec2 sz = ivec2(LUMA_size) - ivec2(1);
 	vec2 pt = conv2_pt;
 	#pragma optionNV(unroll all)
 	for (int y = 0; y < 10; y += 8) {
@@ -1230,7 +1233,7 @@ void hook() {
 			int ax = xy.x + x;
 			if (ax >= 10) break;
 			vec2 p;
-			p = vec2((pos + ivec2(x - 1, y - 1)) * ivec2(2, 2) + ivec2(1, 1)) * conv2_pt;
+			p = vec2(clamp(pos + ivec2(x - 1, y - 1), ivec2(0), sz) * ivec2(2, 2) + ivec2(1, 1)) * conv2_pt;
 			V4 sr0 = V4(conv2_gather(p, 0));
 			V4 sg0 = V4(conv2_gather(p, 1));
 			V4 sb0 = V4(conv2_gather(p, 2));
@@ -1642,6 +1645,7 @@ void hook() {
 	ivec2 xy = ivec2(gl_LocalInvocationID.xy);
 	ivec2 pos = ivec2(gl_WorkGroupID.xy) * ivec2(8, 8) + xy;
 	ivec2 opos = pos * ivec2(2, 2);
+	ivec2 sz = ivec2(LUMA_size) - ivec2(1);
 	vec2 pt = conv3_pt;
 	#pragma optionNV(unroll all)
 	for (int y = 0; y < 10; y += 8) {
@@ -1652,7 +1656,7 @@ void hook() {
 			int ax = xy.x + x;
 			if (ax >= 10) break;
 			vec2 p;
-			p = vec2((pos + ivec2(x - 1, y - 1)) * ivec2(2, 2) + ivec2(1, 1)) * conv3_pt;
+			p = vec2(clamp(pos + ivec2(x - 1, y - 1), ivec2(0), sz) * ivec2(2, 2) + ivec2(1, 1)) * conv3_pt;
 			V4 sr0 = V4(conv3_gather(p, 0));
 			V4 sg0 = V4(conv3_gather(p, 1));
 			V4 sb0 = V4(conv3_gather(p, 2));
@@ -2064,6 +2068,7 @@ void hook() {
 	ivec2 xy = ivec2(gl_LocalInvocationID.xy);
 	ivec2 pos = ivec2(gl_WorkGroupID.xy) * ivec2(8, 8) + xy;
 	ivec2 opos = pos * ivec2(2, 2);
+	ivec2 sz = ivec2(LUMA_size) - ivec2(1);
 	vec2 pt = conv4_pt;
 	#pragma optionNV(unroll all)
 	for (int y = 0; y < 10; y += 8) {
@@ -2074,7 +2079,7 @@ void hook() {
 			int ax = xy.x + x;
 			if (ax >= 10) break;
 			vec2 p;
-			p = vec2((pos + ivec2(x - 1, y - 1)) * ivec2(2, 2) + ivec2(1, 1)) * conv4_pt;
+			p = vec2(clamp(pos + ivec2(x - 1, y - 1), ivec2(0), sz) * ivec2(2, 2) + ivec2(1, 1)) * conv4_pt;
 			V4 sr0 = V4(conv4_gather(p, 0));
 			V4 sg0 = V4(conv4_gather(p, 1));
 			V4 sb0 = V4(conv4_gather(p, 2));
