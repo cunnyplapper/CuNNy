@@ -979,7 +979,7 @@ void hook() {
 //!BIND rcas
 //!WIDTH LUMA.w 2 *
 //!HEIGHT LUMA.h 2 *
-//!COMPONENTS 4
+//!COMPONENTS 1
 //!WHEN OUTPUT.w LUMA.w / 1.3 > OUTPUT.h LUMA.h / 1.3 > *
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
 #ifdef GL_EXT_shader_explicit_arithmetic_types_float16

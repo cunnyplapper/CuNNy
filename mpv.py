@@ -47,7 +47,7 @@ def swizzle(n, i):
     w, h = rectdim(n)
     return i % w, i // w
 
-def prelude(ps, ins, nouts=1, ch=4, loadfn=False, save=None):
+def prelude(ps, ins, nouts=1, loadfn=False, save=None):
     S(f'')
     S(f'//!DESC CuNNy-{version}-{ps}')
     S(f'//!HOOK LUMA')
@@ -67,7 +67,7 @@ def prelude(ps, ins, nouts=1, ch=4, loadfn=False, save=None):
     ins = [ins[0]] if shuffle else ins
     S(f'//!WIDTH LUMA.w' + (f' {w} *' if w > 1 else ''))
     S(f'//!HEIGHT LUMA.h' + (f' {h} *' if h > 1 else ''))
-    S(f'//!COMPONENTS {ch}')
+    S(f'//!COMPONENTS {1 if shuffle else 4}')
     S(f'//!WHEN OUTPUT.w LUMA.w / 1.3 > OUTPUT.h LUMA.h / 1.3 > *')
     S(f'#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable')
     S(f'#ifdef GL_EXT_shader_explicit_arithmetic_types_float16')
