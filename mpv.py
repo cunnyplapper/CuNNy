@@ -29,30 +29,44 @@ def S(txt, end='\n'):
 def fmt(v):
     return f'{v:.3e}' # enough for fp16
 
-def weight(ws, x, y, ich, och, d, iidx, oidx):
+def weight(ws, x, y, ich, och, d, iidx, oidx, l):
     cent = d // 2
-    s = f'\tr += '
+    s = f'\tr{oidx} += '
     w = [fmt(v.item()) for v in ws[(4*oidx):(4*(1+oidx)), (4*iidx):(4*(1+iidx)),
                                    y, x].swapaxes(0, 1).flatten()]
-    s += (f'{"M4" if len(w) > 4 else "V4"}'
-          f'({", ".join(w)}) * s{iidx}[y+{y}][x+{x}];\n')
+    s += (f'{"M4" if len(w) > 4 else "V4"}({", ".join(w)}) * {l};')
     return s
 
-def prelude(ps, ins, nouts=1, ch=4, loadfn=False, save=None, upscale=None):
+def rectdim(n):
+    for i in range(int(n ** 0.5), 0, -1):
+        d, m = divmod(n, i)
+        if m == 0:
+            return d, i
+
+def swizzle(n, i):
+    w, h = rectdim(n)
+    return i % w, i // w
+
+def prelude(ps, ins, nouts=1, ch=4, loadfn=False, save=None):
     S(f'')
     S(f'//!DESC CuNNy-{version}-{ps}')
     S(f'//!HOOK LUMA')
-    if save:
-        S(f'//!COMPUTE {8 * nouts} 8 8 8')
+    shuffle = ps == 'out-shuffle'
+    w, h = (2, 2) if shuffle else rectdim(nouts)
+    S(f'//!COMPUTE {8 * w} {8 * h} 8 8')
+    if shuffle:
+        if ins[1] != 'LUMA':
+            S(f'//!BIND LUMA')
+        save = False
     for inv in ins:
         S(f'//!BIND {inv[0]}')
         if save:
             if inv[0] != 'LUMA':
                 S(f'//!BIND LUMA')
             S(f'//!SAVE {save}')
-    S(f'//!WIDTH LUMA.w' + (f' {upscale} *' if upscale else '') +
-      (f' {nouts} *' if nouts > 1 else ''))
-    S(f'//!HEIGHT LUMA.h' + (f' {upscale} *' if upscale else ''))
+    ins = [ins[0]] if shuffle else ins
+    S(f'//!WIDTH LUMA.w' + (f' {w} *' if w > 1 else ''))
+    S(f'//!HEIGHT LUMA.h' + (f' {h} *' if h > 1 else ''))
     S(f'//!COMPONENTS {ch}')
     S(f'//!WHEN OUTPUT.w LUMA.w / 1.3 > OUTPUT.h LUMA.h / 1.3 > *')
     S(f'#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable')
@@ -69,17 +83,20 @@ def prelude(ps, ins, nouts=1, ch=4, loadfn=False, save=None, upscale=None):
         assert(len(ins) == 1)
         inv = ins[0]
         for i in range(inv[1]):
-            v = (f'texelFetch({inv[0]}_raw, clamp(ipos + ivec2(x, y), ivec2(0), sz)'
-                 f' * ivec2({inv[1]}, 1) + ivec2({i}, 0), 0)')
+            iw, ih = rectdim(inv[1])
+            if iw % 2 == 0 and ih % 2 == 0:
+                break
+            x, y = swizzle(inv[1], i)
+            v = (f'texelFetch({inv[0]}_raw, clamp(pos + ivec2(x, y), ivec2(0), sz)'
+                 f' * ivec2({iw}, {ih}) + ivec2({x}, {y}), 0)')
             if inv[0] == 'LUMA':
                 S(f'#define l{i}(x, y) F({v}.r)')
             else:
                 S(f'#define l{i}(x, y) V4({v})')
-    if upscale:
-        S(f'vec4 hook() {openbr}')
 
 def write(ps, k, actfn, ins):
-    assert(len(ins) == 1)
+    shuffle = ps == 'out-shuffle'
+    assert(len(ins) == (2 if shuffle else 1))
     inv = ins[0]
     ws = m[k+'weight']
     sz = ws.shape
@@ -98,18 +115,18 @@ def write(ps, k, actfn, ins):
     stype = 'F' if inv[0] == 'LUMA' else 'V4'
     ssz = 8 + d - 1
     nins = max(ich // 4 // (2 if crelup else 1), 1)
-    for iidx in range(0, nins):
-        S(f'shared {stype} s{iidx * (2 if crelup else 1)}[{ssz}][{ssz}];')
-        if crelup:
-            S(f'shared {stype} s{iidx * 2 + 1}[{ssz}][{ssz}];')
+    S(f'shared {stype} g[{nins}][{ssz}][{ssz}];')
     global shader
     start = len(shader)
     S(f'void hook() {openbr}')
     S(f'\tivec2 xy = ivec2(gl_LocalInvocationID.xy);')
     S(f'\tivec2 pos = ivec2(gl_WorkGroupID.xy) * ivec2(8, 8) + xy;')
-    S(f'\tivec2 ipos = pos;')
-    S(f'\tivec2 opos = pos * ivec2({nouts}, 1);')
-    S(f'\tivec2 sz = ivec2(LUMA_size) - ivec2(1);')
+    w, h = (2, 2) if shuffle else rectdim(nouts)
+    S(f'\tivec2 opos = pos * ivec2({w}, {h});')
+    iw, ih = rectdim(inv[1])
+    gather = iw % 2 == 0 and ih % 2 == 0
+    if not gather:
+        S(f'\tivec2 sz = ivec2(LUMA_size) - ivec2(1);')
     S(f'\tvec2 pt = {inv[0]}_pt;')
     S(f'\t#pragma optionNV(unroll all)')
     S(f'\tfor (int y = 0; y < {ssz}; y += 8) {openbr}')
@@ -120,35 +137,66 @@ def write(ps, k, actfn, ins):
     S(f'\t\t\tint ax = xy.x + x;')
     S(f'\t\t\tif (ax >= {ssz}) break;')
     cent = d // 2
-    for iidx in range(0, nins):
-        S(f'\t\t\ts{iidx * (2 if crelup else 1)}[ay][ax] = '
-          f'l{iidx}(x - {cent}, y - {cent});')
-    for iidx in range(0, nins):
-        if not crelup:
-            break
-        S(f'\t\t\ts{iidx * 2 + 1}[ay][ax] = -max(-s{iidx * 2}[ay][ax], {stype}(0.0));')
-        S(f'\t\t\ts{iidx * 2}[ay][ax] = max(s{iidx * 2}[ay][ax], {stype}(0.0));')
+    if gather:
+        i = 0
+        S('\t\t\tvec2 p;')
+        for y in range(0, ih, 2):
+            for x in range(0, iw, 2):
+                S(f'\t\t\tp = vec2((pos + ivec2(x - {cent}, y - {cent}))'
+                  f' * ivec2({iw}, {ih}) + ivec2({x + 1}, {y + 1}))'
+                  f' * {inv[0]}_pt;')
+                for j, c in enumerate('rgba'):
+                    S(f'\t\t\t{stype} s{c}{i} ='
+                      f' {stype}({inv[0]}_gather(p, {j}));')
+                for j, c in enumerate('wzxy'):
+                    S(f'\t\t\tg[{i * 4 + j}][ay][ax] ='
+                      f' {stype}(sr{i}.{c}, sg{i}.{c}, sb{i}.{c}, sa{i}.{c});')
+                i += 1
+    else:
+        for iidx in range(0, nins):
+            S(f'\t\t\tg[{iidx}][ay][ax] = l{iidx}(x - {cent}, y - {cent});')
     S(f'\t\t{closebr}\n\t{closebr}')
     S(f'\tbarrier();')
-    wfns = ''
+    S(f'\t{stype} s[{d}][{d}][{2 if crelup else 1}];')
     for oidx in range(nouts):
-        wfns += f'vec4 f{oidx}(int x, int y) {openbr}\n'
-        wfns += '\tV4 r = V4(0.0);\n'
-        for iidx in range(max(ich // 4, 1)):
-            for y in range(d):
-                for x in range(d):
-                    wfns += weight(ws, x, y, ich, och, d, iidx, oidx)
+        S(f'\tV4 r{oidx} = V4(0.0);')
+    for iidx in range(0, max(ich // 4, 1), 2 if crelup else 1):
+        for y in range(d):
+            for x in range(d):
+                for i in range(2 if crelup else 1):
+                    s = f'g[{iidx // (2 if crelup else 1)}][xy.y+{y}][xy.x+{x}]'
+                    if crelup:
+                        s = (f'max({s}, {stype}(0.0))' if i == 0 else
+                             f'-max(-{s}, {stype}(0.0))')
+                    S(f'\ts[{y}][{x}][{i}] = {s};')
+        for y in range(d):
+            for x in range(d):
+                for i in range(2 if crelup else 1):
+                    l = f's[{y}][{x}][{i}]'
+                    for oidx in range(nouts):
+                        S(weight(ws, x, y, ich, och, d, iidx + i, oidx, l))
+    for oidx in range(nouts):
         bn = k + 'bias'
         if bn in m:
             b = [fmt(v.item()) for v in m[bn][4*oidx:4*(oidx+1)]]
-            wfns += f'\tr += V4({", ".join(b)});\n'
-        wfns += f'\treturn {actfn.replace("X", "vec4(r)")};\n'
-        wfns += f'{closebr}\n'
-        S(f'\tvec4 r{oidx} = f{oidx}(xy.x, xy.y);')
-    for oidx in range(nouts):
-        S(f'\timageStore(out_image, opos + ivec2({oidx}, 0), r{oidx});')
+            S(f'\tr{oidx} += V4({", ".join(b)});')
+        if actfn:
+            S(f'\tr{oidx} = {actfn.replace("X", f"r{oidx}")};')
+        x, y = swizzle(nouts, oidx)
+        if shuffle:
+            break
+        S(f'\timageStore(out_image, opos + ivec2({x}, {y}), vec4(r{oidx}));')
+    if shuffle:
+        base = ins[1][0]
+        S(f'\tvec2 opt = 0.5 * LUMA_pt;')
+        S(f'\tvec2 fpos = (vec2(opos) + vec2(0.5)) * opt;')
+        for y in range(2):
+            for x in range(2):
+                c = 'xyzw'[y * 2 + x]
+                S(f'\timageStore(out_image, opos + ivec2({x}, {y}), '
+                  f'vec4(r0.{c} + {base}_tex(fpos + vec2({x}.0, {y}.0) * opt).r,'
+                         ' 0.0, 0.0, 1.0));')
     S(f'{closebr}')
-    shader = shader[:start] + wfns + shader[start:]
     return [(tex, nouts)]
 
 easu = """// FSR mpv | modified
@@ -175,7 +223,7 @@ easu = """// FSR mpv | modified
 // FidelityFX FSR v1.0.2 by AMD
 // ported to mpv by agyild
 
-//!DESC CuNNy-EASU
+//!DESC CuNNy-__VER__-EASU
 //!HOOK LUMA
 //!BIND LUMA
 //!SAVE easu
@@ -329,7 +377,7 @@ vec4 hook() {
 }
 """
 
-rcas = """//!DESC CuNNy-RCAS
+rcas = """//!DESC CuNNy-__VER__-RCAS
 //!HOOK LUMA
 //!BIND easu
 //!SAVE rcas
@@ -394,12 +442,12 @@ lgpl = """
 // modify it under the terms of the GNU Lesser General Public
 // License as published by the Free Software Foundation; either
 // version 3.0 of the License, or (at your option) any later version.
-// 
+//
 // This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 // Lesser General Public License for more details.
-// 
+//
 // You should have received a copy of the GNU Lesser General Public
 // License along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
@@ -409,18 +457,19 @@ S(f'// Copyright (c) 2024 cunnyplapper')
 S(lgpl, end='')
 S('/* ------------------------------------------------------------------- */\n')
 
-fsrtex = 'LUMA'
+basetex = 'LUMA'
 if usefsr:
-    fsrtex = 'easu'
-    S(easu)
+    basetex = 'easu'
+    S(easu.replace("__VER__", version))
 
 if 'RCAS' in stem:
-    fsrtex = 'rcas'
-    S(rcas.replace('__SHARPNESS__', str(m['sharpness'])))
+    basetex = 'rcas'
+    S(rcas.replace("__VER__", version)
+          .replace('__SHARPNESS__', str(m['sharpness'])))
 
 texs = [('LUMA', 1)]
 nconv = 1
-relu = 'max(X, 0.0)' if not crelu else 'X'
+relu = 'max(X, 0.0)' if not crelu else None
 for k_ in m:
     suf = 'weight'
     if not k_.endswith(suf):
@@ -436,17 +485,7 @@ for k_ in m:
         texs = write(f'conv{nconv}', k_, relu, texs)
         nconv += 1
     elif k.startswith('cout'):
-        texs = write('out', k_, 'tanh(X)', texs)
-
-prelude('shuffle', [texs[0], (fsrtex, 1)], ch=1, upscale=2)
-S(f'\tvec4 r = vec4(0.0);')
-S(f'\tvec2 f = fract(out_pos * out_size);')
-S(f'\tivec2 i = ivec2(f * vec2(2.0));')
-S(f'\tr.r = out_tex((vec2(0.5) - f) * out_pt + out_pos)[2*i.y + i.x];')
-S(f'\tr.r += {fsrtex}_tex({fsrtex}_pos).r;')
-S(f'\tr.a = 1.0;')
-S(f'\treturn clamp(r, 0.0, 1.0);')
-S(f'{closebr}')
+        texs = write('out-shuffle', k_, 'tanh(X)', texs + [(basetex, 1)])
 
 fp = f'test/CuNNy-{stem}.glsl'
 with open(fp, 'w') as f:
