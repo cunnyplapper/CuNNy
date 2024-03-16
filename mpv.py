@@ -87,8 +87,9 @@ def prelude(ps, ins, nouts=1, loadfn=False, save=None):
             if iw % 2 == 0 and ih % 2 == 0:
                 break
             x, y = swizzle(inv[1], i)
-            v = (f'texelFetch({inv[0]}_raw, clamp(pos + ivec2(x, y), ivec2(0), sz)'
-                 f' * ivec2({iw}, {ih}) + ivec2({x}, {y}), 0)')
+            v = (f'{inv[0]}_tex((vec2(clamp(pos + ivec2(x, y), ivec2(0), sz)'
+                 f' * ivec2({iw}, {ih}) + ivec2({x}, {y})) + vec2(0.5)) *'
+                 f' {inv[0]}_pt)')
             if inv[0] == 'LUMA':
                 S(f'#define l{i}(x, y) F({v}.r)')
             else:
