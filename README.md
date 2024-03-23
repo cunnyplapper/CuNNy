@@ -17,11 +17,13 @@ Conversely the order of fastest -> slowest would be the reverse, with `0x4`
 being the fastest and `3x32` being the slowest.
 
 Variants:
-- `RCAS`: Provide slightly sharper results for a very small cost in performance
-   (which becomes negligible the bigger the model).
-- `DN`: Trained to denoise images.
 - `DS`: Trained to denoise & sharpen images.
 - `NVL`: Trained on VN screenshots/CG.
+
+There is also an experimental version found in `mpv-dp4a` which uses 8-bit
+`dp4a` instructions. It can be ~1.7x faster than the normal versions depending
+if your hardware supports accelerated `dp4a` instructions with only a slight
+quality decrease. Requires `vo=gpu-next` with `gpu-api=vulkan`.
 
 # Training
 
