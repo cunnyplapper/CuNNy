@@ -7,10 +7,13 @@ from pathlib import Path
 with open(sys.argv[1], 'rb') as f:
     m = pickle.load(f)
 
-shader = ''
+shader = []
+shader_buf = ''
+indent_lvl = 0
 N = sum(1 for x in m.keys() if 'conv' in x and 'weight' in x)
-D = next(m[x] for x in m if 'in' in x and 'weight' in x).shape[0]
+D = next(m[x] for x in m if 'in' in x and x.endswith('weight')).shape[0]
 RGB = 'fancyluma.weight' in m
+QUANT = m.get('quant', False)
 stem = Path(sys.argv[1]).stem
 version = stem[:stem.rfind('-')]
 usercas = 'RCAS' in stem
@@ -18,27 +21,52 @@ usefsr = 'BILINEAR' not in stem
 assert(not RGB)
 crelu = m['crelu']
 
+if False:
+    tot = 0
+    for k, v in m.items():
+        if 'weight' not in k:
+            continue
+        prod = np.prod(v.shape)
+        tot += prod
+        print(k, v.shape, prod)
+
+    print(tot)
+
+    sys.exit(0)
+
 # thanks vim
-openbr = '{'
-closebr = '}'
+OPENBR = '{'
+CLOSEBR = '}'
 
-def S(txt, end='\n'):
-    global shader
-    shader += txt + end
+ndr = lambda *d: np.ndindex(*d)
 
-def fmt(v):
-    return f'{v:.3e}' # enough for fp16
+def flush():
+    global shader, shader_buf
+    shader += [shader_buf]
+    shader_buf = ''
+    
+def S(txt, end='\n', t=0):
+    global shader, shader_buf, indent_lvl
+    if t < 0:
+        indent_lvl += t
+    tabs = indent_lvl * '\t'
+    shader_buf += tabs + ('\n' + tabs).join(txt.split('\n')) + end
+    if t > 0:
+        indent_lvl += t
+    if len(shader_buf) > 1024:
+        flush()
+
+def fmt(v, n=3):
+    return f'{v:.{n}e}' if v != 0 else '.0'
 
 def weight(ws, x, y, ich, och, d, iidx, oidx, l):
     cent = d // 2
-    s = f'\tr{oidx} += '
     w = [fmt(v.item()) for v in ws[(4*oidx):(4*(1+oidx)), (4*iidx):(4*(1+iidx)),
-                                   y, x].swapaxes(0, 1).flatten()]
-    s += (f'{"M4" if len(w) > 4 else "V4"}({", ".join(w)}) * {l};')
-    return s
+                                   y, x].swapaxes(0, 1).ravel()]
+    return f'{"M4" if len(w) > 4 else "V4"}({", ".join(w)}) * {l}'
 
 def rectdim(n):
-    for i in range(int(n ** 0.5), 0, -1):
+    for i in range(min(int(n ** 0.5), 2), 0, -1):
         d, m = divmod(n, i)
         if m == 0:
             return d, i
@@ -47,15 +75,18 @@ def swizzle(n, i):
     w, h = rectdim(n)
     return i % w, i // w
 
-def prelude(ps, ins, nouts=1, loadfn=False, save=None):
+def prelude(ps, ins, nouts=1, loadfn=False, save=None, header=None, half=True,
+            exts=[], compute=(8, 8), realsz=None):
     S(f'')
     S(f'//!DESC CuNNy-{version}-{ps}')
     S(f'//!HOOK LUMA')
     shuffle = ps == 'out-shuffle'
     w, h = (2, 2) if shuffle else rectdim(nouts)
-    S(f'//!COMPUTE {8 * w} {8 * h} 8 8')
+    if not realsz:
+        realsz = compute
+    S(f'//!COMPUTE {realsz[0] * w} {realsz[1] * h} {compute[0]} {compute[1]}')
     if shuffle:
-        if ins[1] != 'LUMA':
+        if ins[1][0] != 'LUMA':
             S(f'//!BIND LUMA')
         save = False
     for inv in ins:
@@ -69,31 +100,209 @@ def prelude(ps, ins, nouts=1, loadfn=False, save=None):
     S(f'//!HEIGHT LUMA.h' + (f' {h} *' if h > 1 else ''))
     S(f'//!COMPONENTS {1 if shuffle else 4}')
     S(f'//!WHEN OUTPUT.w LUMA.w / 1.3 > OUTPUT.h LUMA.h / 1.3 > *')
-    S(f'#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable')
-    S(f'#ifdef GL_EXT_shader_explicit_arithmetic_types_float16')
-    S(f'#\tdefine V4 f16vec4')
-    S(f'#\tdefine M4 f16mat4')
-    S(f'#\tdefine F float16_t')
-    S(f'#else')
-    S(f'#\tdefine V4 vec4')
-    S(f'#\tdefine M4 mat4')
-    S(f'#\tdefine F float')
-    S(f'#endif')
+    if half and exts == []:
+        S(f'#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable')
+        S(f'#ifdef GL_EXT_shader_explicit_arithmetic_types_float16')
+        S(f'#\tdefine V4 f16vec4')
+        S(f'#\tdefine M4 f16mat4')
+        S(f'#\tdefine F float16_t')
+        S(f'#else')
+        S(f'#\tdefine V4 vec4')
+        S(f'#\tdefine M4 mat4')
+        S(f'#\tdefine F float')
+        S(f'#endif')
+    else:
+        for ext in exts:
+            S(f'#extension {ext} : require')
+        if half:
+            S(f'#define V4 f16vec4')
+            S(f'#define M4 f16mat4')
+            S(f'#define F float16_t')
+    if header:
+        S(header)
     if loadfn:
         assert(len(ins) == 1)
         inv = ins[0]
         for i in range(inv[1]):
             iw, ih = rectdim(inv[1])
-            if iw % 2 == 0 and ih % 2 == 0:
-                break
             x, y = swizzle(inv[1], i)
             v = (f'{inv[0]}_tex((vec2(clamp(pos + ivec2(x, y), ivec2(0), sz)'
                  f' * ivec2({iw}, {ih}) + ivec2({x}, {y})) + vec2(0.5)) *'
                  f' {inv[0]}_pt)')
-            if inv[0] == 'LUMA':
-                S(f'#define l{i}(x, y) F({v}.r)')
+            if half:
+                if inv[0] == 'LUMA':
+                    f = f'F({v}.r)'
+                else:
+                    f = f'V4({v})'
             else:
-                S(f'#define l{i}(x, y) V4({v})')
+                f = f'{v}.r' if half else f'{v}'
+            S(f'#define l{i}(x, y) {f}')
+
+def write_dp4a(ps, k, actfn, ins, ws, sz, crelup):
+    shuffle = ps == 'out-shuffle'
+    assert(len(ins) == (2 if shuffle else 1))
+    inv = ins[0]
+    assert(inv[0] != 'LUMA')
+
+    och = sz[0]
+    ich = sz[1]
+    d = sz[2]
+    cm = 2 if crelup else 1
+    cent = d // 2
+    nins = ich // 4
+    nins_uniq = max(nins // cm, 1)
+    nouts = och // 4
+    iw, ih = rectdim(inv[1])
+    gather = iw % 2 == 0 and ih % 2 == 0
+
+    stype = 'F' if inv[0] == 'LUMA' else 'V4'
+    assert(stype == 'V4')
+    ssz = 8 + d - 1
+
+    tex = f'{ps}'
+    prelude(ps, ins, nouts, loadfn=not gather, save=tex, half=False, exts = [
+        'GL_EXT_spirv_intrinsics'
+    ])
+
+    # perhaps not the best way to quantize, but seems to work well enough
+    qf_norm = 1.
+    dqf_norm = 1. / qf_norm
+    qf = 127. * qf_norm
+    dqf = 1. / qf
+    quant = lambda x: (x * qf).round().clip(-127., 127.)
+
+    wsorig = ws.copy()
+    ws = quant(ws)
+
+    # *AccSat isn't supported natively on most desktop GPUs so do the addition
+    # manually
+    S('spirv_instruction (extensions = [\"SPV_KHR_integer_dot_product\"], '
+      'capabilities = [6019, 6018], id = 4450)\n'
+      'int dp4(int a, int b, spirv_literal int fmt);')
+
+    dp4s = [f'dp4(s, {w}, 0)' for w in 'abcd']
+    S(f'#define D(r, s, a, b, c, d) r + ivec4({", ".join(dp4s)})')
+
+    S(f'shared int G[{nins}][{ssz}][{ssz}];')
+
+    S(f'void hook() {OPENBR}', t=1)
+    S(f'ivec2 xy = ivec2(gl_LocalInvocationID.xy);')
+    S(f'ivec2 pos = ivec2(gl_WorkGroupID.xy) * ivec2(8, 8) + xy;')
+    w, h = (2, 2) if shuffle else rectdim(nouts)
+    S(f'ivec2 opos = pos * ivec2({w}, {h});')
+    S('ivec2 sz = ivec2(LUMA_size) - ivec2(1);')
+
+    S(f'for (int y = 0; y < {ssz}; y += 8) {OPENBR}', t=1)
+    S(f'int ay = xy.y + y;')
+    S(f'if (ay >= {ssz}) break;')
+    S(f'for (int x = 0; x < {ssz}; x += 8) {OPENBR}', t=1)
+    S(f'int ax = xy.x + x;')
+    S(f'if (ax >= {ssz}) break;')
+    cent = d // 2
+    if gather:
+        S('vec2 p;')
+        S(f'vec4 {", ".join(f"{e}" for e in "rgba")};')
+        i = 0
+        for y in range(0, ih, 2):
+            for x in range(0, iw, 2):
+                S(f'p = vec2(clamp(pos + ivec2(x - {cent}, y - {cent}), '
+                    'ivec2(0), sz) '
+                  f'* ivec2({iw}, {ih}) + ivec2({x + 1}, {y + 1})) '
+                  f'* {inv[0]}_pt;')
+                for j, e in enumerate('rgba'):
+                    S(f'{e} = {inv[0]}_gather(p, {j});')
+                for j, c in enumerate('wzxy'):
+                    S(f'vec4 v{i+cm*j} = vec4(r.{c}, g.{c}, b.{c}, a.{c}) * '
+                      f'{fmt(qf_norm, 7)};')
+                for j in range(4):
+                    if not crelup:
+                        break
+                    si = i + 2*j
+                    S(f'vec4 v{si+1} = max(-v{si}, vec4(0));')
+                    S(f'v{si} = max(v{si}, vec4(0));')
+                i += 4*cm
+    else:
+        for i in range(0, nins_uniq):
+            si = 2*i if crelup else i
+            S(f'vec4 v{si} = l{i}(x - {cent}, y - {cent}) * {fmt(qf_norm, 7)};')
+            if crelup:
+                S(f'vec4 v{si + 1} = max(-v{si}, vec4(0));')
+                S(f'v{si} = max(v{si}, vec4(0));')
+    for i in range(0, nins_uniq):
+        si = 2*i if crelup else i
+        store = lambda si: S(f'G[{si}][ay][ax] = int(packSnorm4x8(v{si}));')
+        store(si)
+        if crelup:
+            store(si + 1)
+    S(CLOSEBR, t=-1)
+    S(CLOSEBR, t=-1)
+    S('barrier();')
+
+    I = min(2, nins)
+    O = min(8, nouts)
+    S(f'int {", ".join(f"s{i}_{y}_{x}" for i, y, x in np.ndindex(I, d, d))};')
+
+    S(f'ivec4 {", ".join(f"r{i}" for i in range(O))};')
+    S(f'vec4 {", ".join(f"f{i}" for i in range(O))};')
+
+    for oidx in range(0, nouts, O):
+        S(f'{" ".join(f"r{i} = ivec4(0);" for i in range(O))}')
+
+        for iidx in range(0, max(ich // 4, 1), I):
+            sbuf = []
+            for i, y, x in ndr(I, d, d):
+                s = f'G[{iidx+i}][xy.y+{y}][xy.x+{x}]'
+                sbuf += [f's{i}_{y}_{x} = {s};']
+                if len(sbuf) == 2:
+                    S(' '.join(sbuf))
+                    sbuf = []
+            if sbuf:
+                S(' '.join(sbuf))
+            for i, y, x in ndr(I, d, d):
+                l = f's{i}_{y}_{x}'
+                si = iidx + i
+                for o in range(O):
+                    so = oidx + o
+                    w = [ws[4*so+j, 4*si:4*(si+1), y, x].astype(np.int8).view(np.uint32).item()
+                         for j in range(4)]
+                    w = ', '.join(f'0x{v:08X}' for v in w)
+                    S(f'r{o} = D(r{o}, {l}, {w});')
+
+        for o in range(O):
+            so = oidx + o
+            S(f'f{o} = vec4(r{o}) * {fmt(dqf_norm / (127.**2), 7)};')
+            bn = k + 'bias'
+            if bn in m:
+                b = [fmt(v.item()) for v in m[bn][4*so:4*(so+1)]]
+                S(f'f{o} += vec4({", ".join(b)});')
+            if actfn:
+                S(f'f{o} = {actfn.replace("T", "vec4").replace("X", f"f{o}")};')
+            if shuffle:
+                break
+            nw, nh = rectdim(nouts)
+            if nw % 2 == 0 and nh % 2 == 0:
+                sqidx = so // 4
+                sq = so % 4
+                sqy = sq // 2
+                sqx = sq % 2 + 2 * sqidx
+                S(f'imageStore(out_image, opos + ivec2({sqx}, {sqy}), f{o});')
+            else:
+                x, y = swizzle(nouts, so)
+                S(f'imageStore(out_image, opos + ivec2({x}, {y}), f{o});')
+
+    if shuffle:
+        base = ins[1][0]
+        S(f'vec2 opt = 0.5 * LUMA_pt;')
+        S(f'vec2 fpos = (vec2(opos) + vec2(0.5)) * opt;')
+        for y, x in ndr(2, 2):
+            c = 'xyzw'[y * 2 + x]
+            S(f'imageStore(out_image, opos + ivec2({x}, {y}), '
+              f'vec4(f0.{c} + {base}_tex(fpos + vec2({x}.0, {y}.0) * opt).r,'
+                     ' 0.0, 0.0, 1.0));')
+
+    S(CLOSEBR, t=-1)
+
+    return [(tex, nouts)]
 
 def write(ps, k, actfn, ins):
     shuffle = ps == 'out-shuffle'
@@ -102,102 +311,136 @@ def write(ps, k, actfn, ins):
     ws = m[k+'weight']
     sz = ws.shape
     crelup = crelu and inv[0] != 'LUMA'
-    if crelup:
-        ws = ws.reshape(sz[0], -1, 4, sz[2], sz[3])
-        half = ws.shape[1] // 2
-        ws = np.dstack((ws[:, :half], ws[:, half:])).reshape(sz)
+    cm = 2 if crelup else 1
     och = sz[0]
     ich = sz[1]
     d = sz[2]
+
+    if crelup:
+        ws = ws.reshape(sz[0], -1, 4, sz[2], sz[3])
+        half = ws.shape[1] // 2
+        ws = np.dstack((ws[:, :half], -ws[:, half:])).reshape(sz)
+
+    # if there's too little math dp4a seems to decrease performance
+    DP4A_PERF_THRES = 64
+    if QUANT and ich >= 4 and ich * och >= DP4A_PERF_THRES:
+        return write_dp4a(ps, k, actfn, ins, ws, sz, crelup)
+
     tex = f'{ps}'
-    crelup = crelu and inv[0] != 'LUMA'
     nouts = och // 4
-    prelude(ps, ins, nouts, loadfn=True, save=tex)
-    stype = 'F' if inv[0] == 'LUMA' else 'V4'
-    ssz = 8 + d - 1
-    nins = max(ich // 4 // (2 if crelup else 1), 1)
-    S(f'shared {stype} g[{nins}][{ssz}][{ssz}];')
-    global shader
-    start = len(shader)
-    S(f'void hook() {openbr}')
-    S(f'\tivec2 xy = ivec2(gl_LocalInvocationID.xy);')
-    S(f'\tivec2 pos = ivec2(gl_WorkGroupID.xy) * ivec2(8, 8) + xy;')
-    w, h = (2, 2) if shuffle else rectdim(nouts)
-    S(f'\tivec2 opos = pos * ivec2({w}, {h});')
     iw, ih = rectdim(inv[1])
     gather = iw % 2 == 0 and ih % 2 == 0
-    S(f'\tivec2 sz = ivec2(LUMA_size) - ivec2(1);')
-    S(f'\tvec2 pt = {inv[0]}_pt;')
-    S(f'\t#pragma optionNV(unroll all)')
-    S(f'\tfor (int y = 0; y < {ssz}; y += 8) {openbr}')
-    S(f'\t\tint ay = xy.y + y;')
-    S(f'\t\tif (ay >= {ssz}) break;')
-    S(f'\t\t#pragma optionNV(unroll all)')
-    S(f'\t\tfor (int x = 0; x < {ssz}; x += 8) {openbr}')
-    S(f'\t\t\tint ax = xy.x + x;')
-    S(f'\t\t\tif (ax >= {ssz}) break;')
+    tsz = (8, 8)
+
+    prelude(ps, ins, nouts, loadfn=not gather, save=tex, compute=tsz)
+    stype = 'F' if inv[0] == 'LUMA' else 'V4'
+    ssz_x = tsz[0] + d - 1
+    ssz_y = tsz[1] + d - 1
+    nins = max(ich // 4, 1)
+    nins_uniq = max(nins // cm, 1)
+
+    S(f'shared {stype} G[{nins_uniq}][{ssz_y}][{ssz_x}];')
+
+    S(f'void hook() {OPENBR}', t=1)
+    S(f'ivec2 xy = ivec2(gl_LocalInvocationID.xy);')
+    S(f'ivec2 pos = ivec2(gl_WorkGroupID.xy) * ivec2({tsz[0]}, {tsz[1]}) + xy;')
+    w, h = (2, 2) if shuffle else rectdim(nouts)
+    S(f'ivec2 opos = pos * ivec2({w}, {h});')
+    S(f'ivec2 sz = ivec2(LUMA_size) - ivec2(1);')
+
+    S(f'for (int y = 0; y < {ssz_y}; y += {tsz[1]}) {OPENBR}', t=1)
+    S(f'int ay = xy.y + y;')
+    S(f'if (ay >= {ssz_y}) break;')
+    S(f'for (int x = 0; x < {ssz_x}; x += {tsz[0]}) {OPENBR}', t=1)
+    S(f'int ax = xy.x + x;')
+    S(f'if (ax >= {ssz_x}) break;')
     cent = d // 2
     if gather:
+        S('vec2 p;')
         i = 0
-        S('\t\t\tvec2 p;')
         for y in range(0, ih, 2):
             for x in range(0, iw, 2):
-                S(f'\t\t\tp = vec2(clamp(pos + ivec2(x - {cent}, y - {cent}), '
-                                         'ivec2(0), sz)'
+                S(f'p = vec2(clamp(pos + ivec2(x - {cent}, y - {cent}), '
+                                  'ivec2(0), sz)'
                   f' * ivec2({iw}, {ih}) + ivec2({x + 1}, {y + 1}))'
                   f' * {inv[0]}_pt;')
                 for j, c in enumerate('rgba'):
-                    S(f'\t\t\t{stype} s{c}{i} ='
-                      f' {stype}({inv[0]}_gather(p, {j}));')
+                    S(f'{stype} s{c}{i} = {stype}({inv[0]}_gather(p, {j}));')
                 for j, c in enumerate('wzxy'):
-                    S(f'\t\t\tg[{i * 4 + j}][ay][ax] ='
-                      f' {stype}(sr{i}.{c}, sg{i}.{c}, sb{i}.{c}, sa{i}.{c});')
+                    S(f'G[{i * 4 + j}][ay][ax] = '
+                      f'{stype}(sr{i}.{c}, sg{i}.{c}, sb{i}.{c}, sa{i}.{c});')
                 i += 1
     else:
-        for iidx in range(0, nins):
-            S(f'\t\t\tg[{iidx}][ay][ax] = l{iidx}(x - {cent}, y - {cent});')
-    S(f'\t\t{closebr}\n\t{closebr}')
-    S(f'\tbarrier();')
-    S(f'\t{stype} s[{d}][{d}][{2 if crelup else 1}];')
-    for oidx in range(nouts):
-        S(f'\tV4 r{oidx} = V4(0.0);')
-    for iidx in range(0, max(ich // 4, 1), 2 if crelup else 1):
-        for y in range(d):
-            for x in range(d):
-                for i in range(2 if crelup else 1):
-                    s = f'g[{iidx // (2 if crelup else 1)}][xy.y+{y}][xy.x+{x}]'
-                    if crelup:
-                        s = (f'max({s}, {stype}(0.0))' if i == 0 else
-                             f'-max(-{s}, {stype}(0.0))')
-                    S(f'\ts[{y}][{x}][{i}] = {s};')
-        for y in range(d):
-            for x in range(d):
-                for i in range(2 if crelup else 1):
-                    l = f's[{y}][{x}][{i}]'
-                    for oidx in range(nouts):
-                        S(weight(ws, x, y, ich, och, d, iidx + i, oidx, l))
-    for oidx in range(nouts):
-        bn = k + 'bias'
-        if bn in m:
-            b = [fmt(v.item()) for v in m[bn][4*oidx:4*(oidx+1)]]
-            S(f'\tr{oidx} += V4({", ".join(b)});')
-        if actfn:
-            S(f'\tr{oidx} = {actfn.replace("X", f"r{oidx}")};')
-        x, y = swizzle(nouts, oidx)
+        for iidx in range(0, nins_uniq):
+            S(f'G[{iidx}][ay][ax] = l{iidx}(x - {cent}, y - {cent});')
+    S(CLOSEBR, t=-1)
+    S(CLOSEBR, t=-1)
+    S(f'barrier();')
+
+    I = min(2, nins)
+    O = min(8, nouts)
+
+    S(f'{stype} {", ".join(f"s{i}_{y}_{x}" for i, y, x in np.ndindex(I, d, d))};')
+
+    S(f'V4 {", ".join(f"r{i}" for i in range(O))};')
+    for oidx in range(0, nouts, O):
+        S(f'{" ".join(f"r{i} = V4(0.0);" for i in range(O))}')
+
+        for iidx in range(0, max(ich // 4, 1), I):
+            sbuf = []
+            for i, y, x, j in ndr(I // cm, d, d, cm):
+                si = iidx + cm*i + j
+                s = f'G[{si // cm}][xy.y+{y}][xy.x+{x}]'
+                if crelup:
+                    s = (f'max({s}, {stype}(0.0))' if j == 0 else
+                         f'max(-{s}, {stype}(0.0))')
+                sbuf += [f's{cm*i + j}_{y}_{x} = {s};']
+                if len(sbuf) == 2:
+                    S(' '.join(sbuf))
+                    sbuf = []
+            if sbuf:
+                S(' '.join(sbuf))
+            for i, y, x, j in ndr(I // cm, d, d, cm):
+                si = iidx + cm*i + j
+                l = f's{cm*i + j}_{y}_{x}'
+                for o in range(O):
+                    so = oidx + o
+                    wstr = weight(ws, x, y, ich, och, d, si, so, l)
+                    S(f'r{o} += {wstr};')
+
+        for o in range(O):
+            bn = k + 'bias'
+            so = oidx + o
+            if bn in m:
+                b = [fmt(v.item()) for v in m[bn][4*so:4*(so+1)]]
+                S(f'r{o} += V4({", ".join(b)});')
+            if actfn:
+                S(f'r{o} = {actfn.replace("T", "V4").replace("X", f"r{o}")};')
+            if shuffle:
+                break
+            nw, nh = rectdim(nouts)
+            if nw % 2 == 0 and nh % 2 == 0:
+                sqidx = so // 4
+                sq = so % 4
+                sqy = sq // 2
+                sqx = sq % 2 + 2 * sqidx
+                S(f'imageStore(out_image, opos + ivec2({sqx}, {sqy}), vec4(r{o}));')
+            else:
+                x, y = swizzle(nouts, so)
+                S(f'imageStore(out_image, opos + ivec2({x}, {y}), vec4(r{o}));')
+
         if shuffle:
-            break
-        S(f'\timageStore(out_image, opos + ivec2({x}, {y}), vec4(r{oidx}));')
-    if shuffle:
-        base = ins[1][0]
-        S(f'\tvec2 opt = 0.5 * LUMA_pt;')
-        S(f'\tvec2 fpos = (vec2(opos) + vec2(0.5)) * opt;')
-        for y in range(2):
-            for x in range(2):
+            base = ins[1][0]
+            S(f'vec2 opt = 0.5 * LUMA_pt;')
+            S(f'vec2 fpos = (vec2(opos) + vec2(0.5)) * opt;')
+            for y, x in ndr(2, 2):
                 c = 'xyzw'[y * 2 + x]
-                S(f'\timageStore(out_image, opos + ivec2({x}, {y}), '
+                S(f'imageStore(out_image, opos + ivec2({x}, {y}), '
                   f'vec4(r0.{c} + {base}_tex(fpos + vec2({x}.0, {y}.0) * opt).r,'
                          ' 0.0, 0.0, 1.0));')
-    S(f'{closebr}')
+
+    S(CLOSEBR, t=-1)
+
     return [(tex, nouts)]
 
 easu = """// FSR mpv | modified
@@ -470,7 +713,8 @@ if 'RCAS' in stem:
 
 texs = [('LUMA', 1)]
 nconv = 1
-relu = 'max(X, 0.0)' if not crelu else None
+relu = 'max(X, T(0.0))' if not crelu else None
+
 for k_ in m:
     suf = 'weight'
     if not k_.endswith(suf):
@@ -488,7 +732,9 @@ for k_ in m:
     elif k.startswith('cout'):
         texs = write('out-shuffle', k_, 'tanh(X)', texs + [(basetex, 1)])
 
+flush()
+
 fp = f'test/CuNNy-{stem}.glsl'
 with open(fp, 'w') as f:
-    f.write(shader)
+    f.write("".join(shader))
 print(fp)

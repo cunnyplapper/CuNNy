@@ -52,6 +52,7 @@ parser.add_argument('-L', '--max-lr', type=float, default=MAX_LR)
 parser.add_argument('-w', '--weight-decay', type=float, default=W)
 parser.add_argument('-C', '--crelu', action='store_true')
 parser.add_argument('-2', '--l2', action='store_true')
+parser.add_argument('-q', '--quant', action='store_true')
 allargs = [parser.parse_args(args) for args in split(argv, '+')]
 
 hascuda = torch.cuda.is_available()
@@ -115,7 +116,6 @@ if not os.path.isdir(FSR):
 
 transform = transforms.Compose([transforms.ToTensor()])
 dataset = Dataset(f'{gargs.data}/64', FSR, f'{gargs.data}/128', transform)
-dataloader = torch.utils.data.DataLoader(dataset, batch_size=B, shuffle=True)
 
 for args in allargs:
     # internal convolutions
@@ -128,15 +128,12 @@ for args in allargs:
     MAX_LR = args.max_lr
     CRELU = args.crelu
     W = args.weight_decay
+    QUANT = args.quant
+
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=B, shuffle=True)
 
     def act(x):
-        if RGB: # TODO: stop using RGB an an alias for magpie
-            # on magpie, you can increase performance by using lower precision
-            # texture format like RGBA8_SNORM. however as the name implies, it
-            # requires every value to be in [-1, 1]. larger models seem to
-            # produce layers outside that range, so right now use a leaky clamp
-            # between 0 and 1. this does not hinder model quality.
-            # on mpv you can't change the format anyway so no point
+        if QUANT:
             a = 0.01
             relu = lambda x: torch.clamp(x, 0., 1.0) + a * F.relu(x - 1.0)
         else:
@@ -152,7 +149,7 @@ for args in allargs:
             super(Net, self).__init__()
             M = 2 if CRELU else 1
             if RGB:
-                self.fancyluma = nn.Conv2d(3, 1, 1, padding='same')
+                self.fancyluma = nn.Conv2d(3, 1, 1, padding=1)
             self.cin = nn.Conv2d(1, D, 3, padding='same')
             self.conv = nn.ModuleList()
             for i in range(N):
@@ -190,13 +187,13 @@ for args in allargs:
             else:
                 x = torch.add(x, y)
             return torch.clamp(x, 0., 1.)
-    
-    model = Net().to(dev, memory_format=torch.channels_last)
+
+    model = Net()
+    if hascuda:
+        model = model.to(dev, memory_format=torch.channels_last)
     loss_fn = nn.MSELoss() if args.l2 else nn.L1Loss()
-    opt = torch.optim.AdamW(model.parameters(), lr=LR,
-                            weight_decay=args.weight_decay)
-    sched = torch.optim.lr_scheduler.OneCycleLR(
-        opt, max_lr=MAX_LR, steps_per_epoch=len(dataloader), epochs=E)
+    opt = torch.optim.AdamW(
+        model.parameters(), lr=LR, weight_decay=args.weight_decay)
 
     fn = ''
     suf = (
@@ -210,33 +207,30 @@ for args in allargs:
     while os.path.exists((fn := f'models/{version}{i}.pickle')):
         i += 1
 
-    writer = SummaryWriter(fn.replace('models/', 'runs/'), flush_secs=1)
-    epoch = 0
-    nloss = 0
-    runloss = 0.
-
-    @torch.compile(mode='max-autotune')
-    def fwd(x, y, z, true):
+    def fwd(model, x, y, z, true, train):
         opt.zero_grad(True)
         pred = model(x, y, z)
         loss = loss_fn(pred, true)
-        loss.backward()
+        if train:
+            loss.backward()
         return pred, loss
 
-    def train():
-        global epoch, runloss, nloss
+    def run_epoch(model, dev, epoch, fwd_fn, sched, writer, train):
+        nloss = 0
+        runloss = 0.
         for i, (x, y, z, true, files) in enumerate(dataloader):
-            pred, loss = fwd(x, y, z, true)
-            opt.step()
-            sched.step()
+            pred, loss = fwd_fn(model, x.to(dev), y.to(dev), z.to(dev),
+                                true.to(dev), train)
+            if train:
+                opt.step()
+                sched.step()
             runloss += loss
             nloss += 1
             lasty = y
             lastz = z
         with torch.no_grad():
             avgl = runloss / nloss
-            psnrv = psnr(pred, true)
-            if epoch % 20 == 0 or epoch == E - 1:
+            if writer and (epoch % 20 == 0 or epoch == E - 1):
                 diff = true[0] - pred[0]
                 norm = lambda x: torch.clamp(x / 0.2, 0., 1.)
                 diff = torch.cat((norm(-torch.min(diff, torch.tensor(0))),
@@ -249,21 +243,48 @@ for args in allargs:
                                       for x in imgs if len(x[0]) > 0) +
                                 (diff,)),
                     global_step=epoch)
-            writer.add_scalar('L', avgl, epoch + 1)
-            writer.add_scalar('psnr', psnrv, epoch + 1)
-        nloss = 0
-        runloss = 0.
-        epoch += 1
+            if writer:
+                writer.add_scalar('L', avgl, epoch + 1)
+                psnrv = psnr(pred, true)
+                writer.add_scalar('psnr', psnrv, epoch + 1)
         return avgl
 
+    def run(model, dev=dev, *, name, epochs, compile, train):
+        if train:
+            model = model.train()
+        else:
+            model = model.eval()
+        writer = SummaryWriter(name, flush_secs=1) if name else None
+        fwd_fn = torch.compile(fwd, mode=('max-autotune' if hascuda else
+                                          'default')) if compile else fwd
+        sched = torch.optim.lr_scheduler.OneCycleLR(
+            opt, max_lr=MAX_LR, steps_per_epoch=len(dataloader),
+            epochs=epochs) if train else None
+        def impl():
+            epoch = 0
+            for i in (t := tqdm.trange(epochs)):
+                loss = run_epoch(model, dev, epoch, fwd_fn, sched, writer,
+                                 train)
+                t.set_description(f'L: {loss:.5f}')
+                epoch += 1
+        if train:
+            impl()
+        else:
+            with torch.no_grad():
+                impl()
+        if writer:
+            writer.flush()
+
+    writer_name = fn.replace('models/', 'runs/')
+
     print(f'training {fn}')
-    with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-        for i in (t := tqdm.trange(E)):
-            loss = train()
-            t.set_description(f'L: {loss:.5f}')
-    writer.flush()
+    with torch.autocast('cuda' if hascuda else 'cpu', dtype=torch.bfloat16):
+        run(model, name=writer_name, epochs=E, compile=True, train=True)
 
     sd = OrderedDict()
+
+    sd['quant'] = QUANT
+
     for k, v in model.state_dict().items():
         sd[k] = v.cpu().numpy() if hasattr(v, 'numpy') else v
     if rcas:
